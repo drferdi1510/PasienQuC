@@ -210,8 +210,8 @@ function ApiKeyPage({onConnect}){
     <div style={{fontFamily:T.font,background:T.bg,minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}>
       <div className="fu" style={{textAlign:"center",marginBottom:36}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:13,marginBottom:14}}>
-          <div style={{width:50,height:50,borderRadius:15,background:"linear-gradient(135deg,#0ea5e9,#0369a1)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 6px 20px rgba(14,165,233,.3)"}}>
-            <svg width="25" height="25" viewBox="0 0 22 22" fill="none"><path d="M3 14 L7 9 L11 12 L15 5 L19 8" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><circle cx="3" cy="14" r="1.5" fill="white"/><circle cx="19" cy="8" r="1.5" fill="white"/></svg>
+          <div style={{width:64,height:64,borderRadius:16,background:"linear-gradient(135deg,#0b1929,#0c3060)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 6px 20px rgba(14,165,233,.3)",padding:4}}>
+            <img src={LOGO} alt="PasienQuC" style={{width:"100%",height:"100%",objectFit:"contain",filter:"drop-shadow(0 0 8px rgba(14,165,233,.4))"}}/>
           </div>
           <div style={{textAlign:"left"}}>
             <div style={{fontSize:24,fontWeight:700,color:T.text,letterSpacing:-.5}}>PasienQuC</div>
@@ -751,8 +751,151 @@ function QCPanel({data,cfg,blockSize,mult,useAoN,selMethods,apiKey,wardKey,wardL
   </div>);
 }
 
+
+/* ══ LOGO ══ */
+const LOGO = "/logo.png";
+
+/* ══ LOADING SCREEN ══ */
+function LoadingScreen({onDone}){
+  const[progress,setProgress]=useState(0);
+  const[phase,setPhase]=useState(0);
+  const phases=["Menginisialisasi sistem...","Memuat konfigurasi parameter...","Menghubungkan ke database...","Mempersiapkan dashboard...","Siap!"];
+  useEffect(()=>{
+    let p=0;
+    const iv=setInterval(()=>{
+      p+=Math.random()*18+4;
+      if(p>=100){p=100;clearInterval(iv);setTimeout(()=>onDone(),600);}
+      setProgress(Math.min(100,+p.toFixed(0)));
+      setPhase(Math.min(4,Math.floor(p/25)));
+    },120);
+    return()=>clearInterval(iv);
+  },[onDone]);
+  return(
+    <div style={{fontFamily:T.font,background:"linear-gradient(135deg,#0b1929 0%,#0c2340 50%,#0b1929 100%)",minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24,position:"fixed",inset:0,zIndex:9999}}>
+      {/* Animated rings */}
+      <div style={{position:"relative",width:200,height:200,marginBottom:32}}>
+        <div style={{position:"absolute",inset:0,borderRadius:"50%",border:"1px solid rgba(14,165,233,.15)",animation:"spin 8s linear infinite"}}/>
+        <div style={{position:"absolute",inset:10,borderRadius:"50%",border:"1px solid rgba(14,165,233,.1)",animation:"spin 6s linear infinite reverse"}}/>
+        <div style={{position:"absolute",inset:20,borderRadius:"50%",border:"1px solid rgba(14,165,233,.08)",animation:"spin 4s linear infinite"}}/>
+        <img src={LOGO} alt="PasienQuC" style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"contain",padding:16,filter:"drop-shadow(0 0 20px rgba(14,165,233,.5))"}}/>
+      </div>
+      <div style={{fontSize:28,fontWeight:700,color:"#fff",letterSpacing:-.5,marginBottom:4}}>PasienQuC</div>
+      <div style={{fontSize:12,color:"rgba(14,165,233,.8)",fontFamily:T.mono,letterSpacing:2,marginBottom:8,textTransform:"uppercase"}}>Pencitraan Biomedis, Riset & Teknologi QC</div>
+      <div style={{fontSize:11,color:"rgba(255,255,255,.4)",fontFamily:T.mono,marginBottom:32}}>v.0.4.0</div>
+      {/* Progress bar */}
+      <div style={{width:280,marginBottom:14}}>
+        <div style={{background:"rgba(255,255,255,.08)",borderRadius:20,height:6,overflow:"hidden"}}>
+          <div style={{height:"100%",borderRadius:20,background:"linear-gradient(90deg,#0ea5e9,#38bdf8)",width:`${progress}%`,transition:"width .15s ease",boxShadow:"0 0 10px rgba(14,165,233,.6)"}}/>
+        </div>
+      </div>
+      <div style={{fontSize:11,color:"rgba(14,165,233,.7)",fontFamily:T.mono,letterSpacing:.5}}>{phases[phase]}</div>
+      <div style={{position:"absolute",bottom:24,fontSize:11,color:"rgba(255,255,255,.2)",fontFamily:T.mono}}>Aplikasi dibuat oleh dr. Alifferdi Rahman Wiyono · April 2026</div>
+    </div>
+  );
+}
+
+/* ══ ABOUT TAB ══ */
+function AboutTab(){
+  const glossary=[
+    {term:"Block Size (n)",icon:"📦",desc:"Jumlah data pasien yang digunakan dalam satu perhitungan statistik. Makin besar n, makin stabil estimasinya — tetapi makin lambat mendeteksi perubahan. Rekomendasi: 15–30 untuk IGD/ICU, 20–50 untuk rawat jalan."},
+    {term:"Moving Average (MA)",icon:"📈",desc:"Rata-rata bergerak sederhana dari n data terakhir. Metode paling klasik dan mudah diinterpretasikan. Responsif terhadap perubahan tetapi rentan terhadap outlier."},
+    {term:"EWMA",icon:"⚡",desc:"Exponentially Weighted Moving Average — rata-rata bergerak yang memberi bobot lebih besar pada data terbaru dibanding data lama. Lebih sensitif terhadap drift mendadak dibanding MA biasa."},
+    {term:"Trimmed Mean",icon:"✂️",desc:"Rata-rata yang membuang sejumlah nilai ekstrem (outlier) di kedua ujung distribusi sebelum dihitung. Sangat cocok untuk populasi IGD dan ICU yang banyak nilai abnormal patologis."},
+    {term:"Median / AoN",icon:"⚖️",desc:"Average of Normals — hanya menggunakan hasil dalam rentang referensi normal. Metode paling robust untuk populasi campuran. Tidak terpengaruh oleh nilai ekstrem sama sekali."},
+    {term:"Control Limit (±SD)",icon:"🎯",desc:"Batas atas (UCL) dan batas bawah (LCL) yang jika dilampaui mengindikasikan kemungkinan adanya masalah analitik. Umumnya menggunakan ±2SD. Semakin ketat batasnya, semakin sensitif tetapi semakin banyak false alarm."},
+    {term:"AoN Filter",icon:"🔍",desc:"Filter otomatis yang mengecualikan nilai di luar rentang referensi sebelum perhitungan QC dilakukan. Sangat direkomendasikan untuk ruangan dengan banyak pasien kritis (IGD, ICU)."},
+    {term:"Levey-Jennings Chart",icon:"📊",desc:"Grafik QC klasik yang menampilkan setiap data point secara individual dengan garis batas ±1SD, ±2SD, dan ±3SD. Memudahkan identifikasi visual terhadap tren, shift, dan outlier."},
+    {term:"Westgard Rules",icon:"⚠️",desc:"Seperangkat aturan statistik standar internasional untuk mendeteksi error random dan sistematik. Meliputi: 1₂s (warning), 1₃s (reject), 2₂s, R₄s, 4₁s, dan 10x. Dasar utama QC laboratorium modern."},
+    {term:"Sigma Metric (σ)",icon:"🏆",desc:"Ukuran performa analitik komprehensif: σ = (TEa − |Bias|) / CV%. Skala: ≥6σ = World Class, 4–6σ = Good, 3–4σ = Marginal, <3σ = Poor. Digunakan untuk menentukan frekuensi dan keketatan QC yang diperlukan."},
+    {term:"OPSpecs",icon:"📐",desc:"Operational Process Specifications — panduan pemilihan prosedur QC yang optimal berdasarkan sigma metric. Membantu menentukan berapa level kontrol dan rule mana yang paling tepat untuk metode tertentu."},
+    {term:"PBRTQC",icon:"🔬",desc:"Patient-Based Real-Time QC — pendekatan QC yang menggunakan distribusi statistik hasil pasien rutin sebagai indikator stabilitas analitik. Bersifat kontinu 24 jam dan tidak memerlukan biaya material kontrol tambahan."},
+  ];
+
+  return(
+    <div className="fi" style={{maxWidth:860,margin:"0 auto"}}>
+      {/* Hero card */}
+      <div style={{...CS,padding:0,overflow:"hidden",marginBottom:20}}>
+        <div style={{background:"linear-gradient(135deg,#0b1929,#0c2340,#0b3060)",padding:"32px 36px",display:"flex",alignItems:"center",gap:28}}>
+          <img src={LOGO} alt="PasienQuC" style={{width:90,height:90,objectFit:"contain",filter:"drop-shadow(0 0 16px rgba(14,165,233,.5))",flexShrink:0}}/>
+          <div>
+            <div style={{fontSize:26,fontWeight:700,color:"#fff",letterSpacing:-.5,marginBottom:4}}>PasienQuC <span style={{fontSize:14,fontWeight:400,color:"rgba(14,165,233,.8)",fontFamily:T.mono}}>v.0.4.0</span></div>
+            <div style={{fontSize:13,color:"rgba(14,165,233,.9)",fontFamily:T.mono,letterSpacing:1.5,textTransform:"uppercase",marginBottom:10}}>Pencitraan Biomedis, Riset & Teknologi Quality Control</div>
+            <div style={{fontSize:13,color:"rgba(255,255,255,.7)",lineHeight:1.7,maxWidth:520}}>Sistem pemantauan kualitas laboratorium berbasis data pasien (PBRTQC) — lebih cepat, lebih cerdas, berbasis cloud.</div>
+            <div style={{display:"flex",gap:8,marginTop:12,flexWrap:"wrap"}}>
+              {["React · Vite","Recharts","Groq AI · LLaMA 3.3 70B","Supabase PostgreSQL"].map(t=>(
+                <span key={t} style={{fontSize:10,padding:"3px 10px",borderRadius:20,background:"rgba(14,165,233,.15)",color:"rgba(14,165,233,.9)",border:"1px solid rgba(14,165,233,.25)",fontFamily:T.mono}}>{t}</span>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div style={{padding:"24px 36px"}}>
+          {/* About sections */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:24}}>
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:T.blue,textTransform:"uppercase",letterSpacing:1.5,fontFamily:T.mono,marginBottom:10}}>Tentang Aplikasi</div>
+              <div style={{fontSize:14,color:T.text,lineHeight:1.8}}>
+                PasienQuC membantu analis dan dokter spesialis patologi klinik memantau performa analitik instrumen laboratorium secara berkelanjutan, menggunakan data hasil pemeriksaan pasien sebagai sumber QC primer maupun komplementer.
+              </div>
+            </div>
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:T.blue,textTransform:"uppercase",letterSpacing:1.5,fontFamily:T.mono,marginBottom:10}}>Metodologi</div>
+              <div style={{fontSize:14,color:T.text,lineHeight:1.8}}>
+                Mengimplementasikan standar internasional PBRTQC yang direkomendasikan oleh EFLM (<em>European Federation of Laboratory Medicine</em>), dengan tambahan fitur Westgard multirule, Sigma Metric, dan OPSpecs yang lazim digunakan dalam akreditasi ISO 15189.
+              </div>
+            </div>
+          </div>
+
+          {/* Developer card */}
+          <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:`1.5px solid ${T.blueL}`,borderRadius:12,padding:"18px 22px",marginBottom:24,display:"flex",alignItems:"center",gap:20}}>
+            <div style={{width:52,height:52,borderRadius:"50%",background:"linear-gradient(135deg,#0ea5e9,#0369a1)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:22}}>👨‍⚕️</div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:11,color:T.textT,fontFamily:T.mono,letterSpacing:1.5,textTransform:"uppercase",marginBottom:3}}>Pengembang</div>
+              <div style={{fontSize:16,fontWeight:700,color:T.text,marginBottom:2}}>Alifferdi Rahman Wiyono, dr.</div>
+              <div style={{fontSize:13,color:T.textS}}>Peserta PPDS Patologi Klinik · Universitas Airlangga / RSUD Dr. Soetomo Surabaya</div>
+            </div>
+            <div style={{textAlign:"right",flexShrink:0}}>
+              <div style={{fontSize:10,color:T.textT,fontFamily:T.mono,marginBottom:3}}>Versi saat ini</div>
+              <div style={{fontSize:18,fontWeight:700,color:T.blue,fontFamily:T.mono}}>v.0.4.0</div>
+              <div style={{fontSize:10,color:T.textT,fontFamily:T.mono}}>April 2026</div>
+            </div>
+          </div>
+
+          {/* Ongoing development banner */}
+          <div style={{background:"linear-gradient(135deg,#fefce8,#fef9c3)",border:`1.5px solid #fde047`,borderRadius:12,padding:"16px 20px",marginBottom:0,display:"flex",alignItems:"flex-start",gap:14}}>
+            <div style={{fontSize:24,flexShrink:0}}>🚀</div>
+            <div>
+              <div style={{fontSize:13,fontWeight:700,color:"#854d0e",marginBottom:4}}>Aplikasi Terus Berkembang</div>
+              <div style={{fontSize:13,color:"#713f12",lineHeight:1.7}}>
+                <em>"Aplikasi ini dirancang untuk terus berkembang. Setiap versi baru menghadirkan fitur yang lebih lengkap, lebih akurat, dan lebih relevan dengan kebutuhan laboratorium klinik modern di Indonesia."</em>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Glossary */}
+      <div style={{...CS,padding:"22px 28px"}}>
+        <div style={{fontSize:14,fontWeight:700,color:T.text,marginBottom:4}}>Panduan Istilah & Parameter</div>
+        <div style={{fontSize:12,color:T.textS,marginBottom:20}}>Penjelasan singkat mengenai metode, parameter, dan fitur yang tersedia di PasienQuC.</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+          {glossary.map(g=>(
+            <div key={g.term} style={{background:T.surfB,border:`1.5px solid ${T.border}`,borderRadius:12,padding:"14px 16px",transition:"box-shadow .2s"}} className="ch">
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:7}}>
+                <span style={{fontSize:18}}>{g.icon}</span>
+                <div style={{fontSize:13,fontWeight:700,color:T.text}}>{g.term}</div>
+              </div>
+              <div style={{fontSize:12.5,color:T.textS,lineHeight:1.72}}>{g.desc}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ══ MAIN APP ══ */
 export default function PasienQuC(){
+  const[loading,setLoading]=useState(true);
   const[apiKey,setApiKey]=useState("");
   const[tab,setTab]=useState("dashboard");
   const[group,setGroup]=useState("HEMATOLOGI");
@@ -791,23 +934,26 @@ export default function PasienQuC(){
   const aiCtxGlobal=useMemo(()=>{let c=`PasienQuC · ${PARAM_GROUPS[group].label} · ${cfg?.label||param}\n`;selWards.forEach(w=>{const raw=getWardRaw(w);if(!raw)return;const m=avg(raw),s=std(raw);c+=`${WARDS[w].label}: N=${raw.length} Mean=${m.toFixed(3)} CV=${((s/m)*100).toFixed(2)}%\n`;});return c;},[wardData,selWards,group,param,cfg]);
 
   const toggleMethod=m=>setSelMethods(p=>p.includes(m)?p.filter(x=>x!==m):[...p,m]);
-  const TABS=["dashboard","ai","tren","data","report"];
+  const TABS=["dashboard","ai","tren","data","report","tentang"];
 
   if(!apiKey)return <ApiKeyPage onConnect={setApiKey}/>;
+  if(loading)return <LoadingScreen onDone={()=>setLoading(false)}/>;
 
   return(<div style={{fontFamily:T.font,background:T.bg,minHeight:"100vh",color:T.text,opacity:mounted?1:0,transition:"opacity .4s"}}>
 
     {/* HEADER */}
     <div style={{background:T.surface,borderBottom:`1.5px solid ${T.border}`,padding:"11px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 14px rgba(14,165,233,.05)"}}>
       <div style={{display:"flex",alignItems:"center",gap:11}}>
-        <div style={{width:34,height:34,borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#0369a1)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 4px 12px rgba(14,165,233,.24)"}}><svg width="17" height="17" viewBox="0 0 22 22" fill="none"><path d="M3 14 L7 9 L11 12 L15 5 L19 8" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><circle cx="3" cy="14" r="1.5" fill="white"/><circle cx="19" cy="8" r="1.5" fill="white"/></svg></div>
+        <div style={{width:36,height:36,borderRadius:10,background:"linear-gradient(135deg,#0b1929,#0c3060)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 4px 12px rgba(14,165,233,.24)",padding:3}}>
+          <img src={LOGO} alt="PasienQuC" style={{width:"100%",height:"100%",objectFit:"contain",filter:"drop-shadow(0 0 6px rgba(14,165,233,.4))"}}/>
+        </div>
         <div>
           <div style={{fontSize:15,fontWeight:700,color:T.text,letterSpacing:-.3}}>PasienQuC <span style={{color:T.blue}}>·</span> v.0.4.0</div>
           <div style={{fontSize:9,color:T.textT,fontFamily:T.mono,letterSpacing:1}}>LJ Chart · Westgard · Tren · Supabase · AI</div>
         </div>
       </div>
       <div style={{display:"flex",gap:4,alignItems:"center"}}>
-        {TABS.map(t=><button key={t} className="tb" onClick={()=>setTab(t)} style={{padding:"5px 12px",borderRadius:7,border:`1.5px solid ${tab===t?T.blue:T.border}`,background:tab===t?T.blue:"transparent",color:tab===t?"#fff":T.textS,fontSize:11,fontFamily:T.font,fontWeight:tab===t?600:400,textTransform:"capitalize"}}>{t==="ai"?"✦ AI":t==="tren"?"📅 Tren":t}</button>)}
+        {TABS.map(t=><button key={t} className="tb" onClick={()=>setTab(t)} style={{padding:"5px 12px",borderRadius:7,border:`1.5px solid ${tab===t?T.blue:T.border}`,background:tab===t?T.blue:"transparent",color:tab===t?"#fff":T.textS,fontSize:11,fontFamily:T.font,fontWeight:tab===t?600:400,textTransform:"capitalize"}}>{t==="ai"?"✦ AI":t==="tren"?"📅 Tren":t==="tentang"?"ℹ️ Tentang":t}</button>)}
         <div style={{marginLeft:5,display:"flex",alignItems:"center",gap:4,padding:"4px 8px",background:T.surfB,borderRadius:6,border:`1px solid ${T.border}`}}><div style={{width:5,height:5,borderRadius:"50%",background:T.ok}}/><span style={{fontSize:9,color:T.textS,fontFamily:T.mono}}>Supabase</span></div>
         <button className="sb" onClick={()=>setApiKey("")} style={{padding:"4px 9px",background:"transparent",border:`1.5px solid ${T.danger}44`,borderRadius:7,color:T.danger,fontSize:11,fontFamily:T.font,cursor:"pointer"}}>Logout</button>
       </div>
@@ -972,9 +1118,12 @@ export default function PasienQuC(){
       </div>}
     </div>
 
+      {/* TENTANG TAB */}
+      {tab==="tentang"&&<AboutTab/>}
+
     {/* FOOTER */}
     <div style={{borderTop:`1.5px solid ${T.border}`,background:T.surface,padding:"11px 24px",display:"flex",alignItems:"center",justifyContent:"center",gap:12,marginTop:20}}>
-      <div style={{display:"flex",alignItems:"center",gap:6}}><div style={{width:22,height:22,borderRadius:6,background:"linear-gradient(135deg,#0ea5e9,#0369a1)",display:"flex",alignItems:"center",justifyContent:"center"}}><svg width="11" height="11" viewBox="0 0 22 22" fill="none"><path d="M3 14 L7 9 L11 12 L15 5 L19 8" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg></div><span style={{fontSize:12,fontWeight:700,color:T.text}}>PasienQuC</span><span style={{fontSize:9,color:T.textT,fontFamily:T.mono,background:T.blueL,padding:"2px 6px",borderRadius:5}}>v.0.4.0</span></div>
+      <div style={{display:"flex",alignItems:"center",gap:6}}><div style={{width:28,height:28,borderRadius:7,background:"linear-gradient(135deg,#0b1929,#0c3060)",display:"flex",alignItems:"center",justifyContent:"center",padding:2}}><img src={LOGO} alt="PasienQuC" style={{width:"100%",height:"100%",objectFit:"contain"}}/></div><span style={{fontSize:12,fontWeight:700,color:T.text}}>PasienQuC</span><span style={{fontSize:9,color:T.textT,fontFamily:T.mono,background:T.blueL,padding:"2px 6px",borderRadius:5}}>v.0.4.0</span></div>
       <div style={{width:1,height:14,background:T.border}}/>
       <div style={{fontSize:11,color:T.textS,fontFamily:T.mono}}>Aplikasi dibuat oleh <span style={{color:T.blue,fontWeight:600}}>dr. WIY</span></div>
       <div style={{width:1,height:14,background:T.border}}/>
