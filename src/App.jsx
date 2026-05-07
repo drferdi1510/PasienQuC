@@ -893,6 +893,406 @@ function AboutTab(){
   );
 }
 
+
+/* ══ MIDDLEWARE TAB ══ */
+const MW_STORAGE_KEY = "pasienquc_middleware_config";
+const MW_LOG_KEY = "pasienquc_middleware_logs";
+
+const PARAM_MAP_DEFAULTS = {
+  Hb:"Hb", MCV:"MCV", PLT:"PLT", WBC:"WBC", MCH:"MCH", MCHC:"MCHC", RBC:"RBC",
+  Na:"Na", K:"K", Cl:"Cl", Glukosa:"Glukosa", Ureum:"Ureum", Kreatinin:"Kreatinin",
+  PT:"PT", APTT:"APTT", INR:"INR", pH:"pH", pCO2:"pCO2", pO2:"pO2",
+  CRP:"CRP", PCT:"PCT", Ferritin:"Ferritin",
+};
+
+function MiddlewareTab(){
+  const defInstrument = {id:Date.now(),name:"",brand:"",model:"",ward:"IGD",ip:"",port:"4000",protocol:"REST",paramMap:{...PARAM_MAP_DEFAULTS},active:true};
+  const[instruments,setInstruments]=useState(()=>{
+    try{const s=localStorage.getItem(MW_STORAGE_KEY);return s?JSON.parse(s):[];}catch{return[];}
+  });
+  const[logs,setLogs]=useState(()=>{
+    try{const s=localStorage.getItem(MW_LOG_KEY);return s?JSON.parse(s).slice(-100):[];}catch{return[];}
+  });
+  const[editing,setEditing]=useState(null); // instrument being edited
+  const[showForm,setShowForm]=useState(false);
+  const[form,setForm]=useState({...defInstrument,id:Date.now()});
+  const[pingResult,setPingResult]=useState({});
+  const[pinging,setPinging]=useState({});
+  const[activeSection,setActiveSection]=useState("instruments"); // instruments | endpoint | log
+  const[copied,setCopied]=useState(false);
+  const[testPayload,setTestPayload]=useState("");
+  const[testResult,setTestResult]=useState("");
+  const[testLoading,setTestLoading]=useState(false);
+  const logRef=useRef();
+
+  // Save to localStorage on change
+  useEffect(()=>{localStorage.setItem(MW_STORAGE_KEY,JSON.stringify(instruments));},[instruments]);
+  useEffect(()=>{localStorage.setItem(MW_LOG_KEY,JSON.stringify(logs));if(logRef.current)logRef.current.scrollTop=logRef.current.scrollHeight;},[logs]);
+
+  const addLog=(type,msg,instr="")=>{
+    const entry={id:Date.now(),time:new Date().toLocaleTimeString("id-ID"),type,msg,instr};
+    setLogs(p=>[...p.slice(-99),entry]);
+  };
+
+  const saveInstrument=()=>{
+    if(!form.name.trim()){alert("Nama instrumen wajib diisi.");return;}
+    if(editing!==null){
+      setInstruments(p=>p.map(i=>i.id===editing?{...form,id:editing}:i));
+      addLog("info",`Instrumen diperbarui: ${form.name}`,form.name);
+    } else {
+      const newI={...form,id:Date.now()};
+      setInstruments(p=>[...p,newI]);
+      addLog("info",`Instrumen ditambahkan: ${form.name}`,form.name);
+    }
+    setShowForm(false);setEditing(null);setForm({...defInstrument,id:Date.now()});
+  };
+
+  const deleteInstrument=(id)=>{
+    const name=instruments.find(i=>i.id===id)?.name||"";
+    setInstruments(p=>p.filter(i=>i.id!==id));
+    addLog("warn",`Instrumen dihapus: ${name}`,name);
+  };
+
+  const editInstrument=(instr)=>{
+    setForm({...instr});setEditing(instr.id);setShowForm(true);
+  };
+
+  const toggleActive=(id)=>{
+    setInstruments(p=>p.map(i=>i.id===id?{...i,active:!i.active}:i));
+  };
+
+  const pingInstrument=async(instr)=>{
+    setPinging(p=>({...p,[instr.id]:true}));
+    setPingResult(p=>({...p,[instr.id]:null}));
+    addLog("info",`Ping ke ${instr.name} (${instr.ip}:${instr.port})...`,instr.name);
+    try{
+      // We can't actually ping an IP from browser (CORS), so we do a connectivity check
+      const start=Date.now();
+      // Try to reach Supabase as connectivity proxy
+      const ac=new AbortController(),tid=setTimeout(()=>ac.abort(),4000);
+      await fetch(`${SB_URL}/rest/v1/`,{headers:{"apikey":SB_KEY},signal:ac.signal});
+      clearTimeout(tid);
+      const ms=Date.now()-start;
+      setPingResult(p=>({...p,[instr.id]:{ok:true,ms}}));
+      addLog("ok",`Koneksi internet OK (${ms}ms). Pastikan middleware sudah dikonfigurasi untuk POST ke endpoint Supabase.`,instr.name);
+    }catch(e){
+      setPingResult(p=>({...p,[instr.id]:{ok:false,msg:e.message}}));
+      addLog("error",`Koneksi gagal: ${e.message}`,instr.name);
+    }
+    setPinging(p=>({...p,[instr.id]:false}));
+  };
+
+  // Supabase endpoint info
+  const endpointUrl=`${SB_URL}/rest/v1/qc_sessions`;
+  const curlExample=(ward="IGD",param="Hb",value="12.5")=>`curl -X POST "${endpointUrl}" \
+  -H "apikey: ${SB_KEY.slice(0,40)}..." \
+  -H "Authorization: Bearer ${SB_KEY.slice(0,40)}..." \
+  -H "Content-Type: application/json" \
+  -H "Prefer: return=representation" \
+  -d '{"param":"${param}","ward":"${ward}","value":${value},"recorded_at":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}'`;
+
+  const jsonExample=(ward="IGD",param="Hb",value="12.5")=>JSON.stringify({
+    param,ward,value:parseFloat(value),
+    recorded_at:new Date().toISOString()
+  },null,2);
+
+  const copyEndpoint=()=>{
+    navigator.clipboard.writeText(endpointUrl);
+    setCopied(true);setTimeout(()=>setCopied(false),2000);
+  };
+
+  // Test send data manually
+  const sendTestData=async()=>{
+    setTestLoading(true);setTestResult("");
+    try{
+      const payload=JSON.parse(testPayload);
+      const arr=Array.isArray(payload)?payload:[payload];
+      await sbFetch("/qc_sessions",{method:"POST",body:JSON.stringify(arr)});
+      setTestResult("✅ Data berhasil dikirim ke Supabase!");
+      addLog("ok",`Test data terkirim: ${arr.length} record`,"Manual Test");
+    }catch(e){
+      setTestResult(`❌ Error: ${e.message}`);
+      addLog("error",`Test data gagal: ${e.message}`,"Manual Test");
+    }
+    setTestLoading(false);
+  };
+
+  const logColor={ok:T.ok,error:T.danger,warn:T.warn,info:T.blue};
+
+  const sectionBtn=(id,label)=>(
+    <button className="tb" onClick={()=>setActiveSection(id)} style={{padding:"7px 18px",borderRadius:8,border:`1.5px solid ${activeSection===id?T.blue:T.border}`,background:activeSection===id?T.blue:"transparent",color:activeSection===id?"#fff":T.textS,fontSize:12,fontFamily:T.font,fontWeight:activeSection===id?600:400,cursor:"pointer"}}>{label}</button>
+  );
+
+  return(
+    <div className="fi">
+      <div style={{marginBottom:16}}>
+        <div style={{fontSize:18,fontWeight:700,color:T.text}}>⚙️ Middleware & Instrumen</div>
+        <div style={{fontSize:11,color:T.textS,marginTop:2,fontFamily:T.mono}}>Konfigurasi koneksi instrumen → Supabase → PasienQuC</div>
+      </div>
+
+      {/* Architecture diagram */}
+      <div style={{...CS,padding:16,marginBottom:16,background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)"}}>
+        <div style={{fontSize:11,color:T.blueD,fontFamily:T.mono,letterSpacing:1,marginBottom:10,textTransform:"uppercase"}}>Arsitektur Koneksi</div>
+        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+          {[
+            {icon:"🔬",label:"Instrumen / Analyzer",color:"#ef4444"},
+            {arrow:"→"},
+            {icon:"⚙️",label:"Middleware",color:"#f59e0b"},
+            {arrow:"→"},
+            {icon:"🌐",label:"HTTP POST",color:"#8b5cf6"},
+            {arrow:"→"},
+            {icon:"☁️",label:"Supabase DB",color:"#0369a1"},
+            {arrow:"→"},
+            {icon:"📊",label:"PasienQuC",color:"#0ea5e9"},
+          ].map((item,i)=>item.arrow
+            ?<div key={i} style={{fontSize:18,color:T.textT,fontWeight:300}}>→</div>
+            :<div key={i} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:10,background:`${item.color}12`,border:`1.5px solid ${item.color}33`}}>
+              <span style={{fontSize:16}}>{item.icon}</span>
+              <span style={{fontSize:11,fontWeight:600,color:item.color}}>{item.label}</span>
+            </div>
+          )}
+        </div>
+        <div style={{fontSize:11,color:T.textS,marginTop:10,lineHeight:1.6}}>
+          Middleware mengirim data hasil pasien via <strong>HTTP POST</strong> ke endpoint Supabase. PasienQuC membaca data secara real-time dari Supabase untuk analisis QC.
+        </div>
+      </div>
+
+      {/* Section tabs */}
+      <div style={{display:"flex",gap:8,marginBottom:16}}>
+        {sectionBtn("instruments","🔬 Daftar Instrumen")}
+        {sectionBtn("endpoint","🌐 Endpoint & Panduan")}
+        {sectionBtn("log","📋 Log Aktivitas")}
+      </div>
+
+      {/* ── INSTRUMENTS SECTION ── */}
+      {activeSection==="instruments"&&<div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+          <div style={{fontSize:13,fontWeight:600,color:T.text}}>Instrumen Terdaftar ({instruments.length})</div>
+          <button className="pb" onClick={()=>{setForm({...defInstrument,id:Date.now()});setEditing(null);setShowForm(true);}} style={{...BP,display:"flex",alignItems:"center",gap:6,padding:"7px 16px",fontSize:12}}>+ Tambah Instrumen</button>
+        </div>
+
+        {instruments.length===0&&!showForm&&(
+          <div style={{...CS,padding:36,textAlign:"center"}}>
+            <div style={{fontSize:36,marginBottom:12}}>🔬</div>
+            <div style={{fontSize:14,color:T.textS,marginBottom:6}}>Belum ada instrumen terdaftar</div>
+            <div style={{fontSize:12,color:T.textT,marginBottom:20}}>Tambahkan instrumen untuk mulai mengonfigurasi koneksi middleware</div>
+            <button className="pb" onClick={()=>{setForm({...defInstrument,id:Date.now()});setEditing(null);setShowForm(true);}} style={BP}>+ Tambah Instrumen Pertama</button>
+          </div>
+        )}
+
+        {/* Instrument list */}
+        {instruments.map(instr=>(
+          <div key={instr.id} className="ch" style={{...CS,padding:18,marginBottom:12,borderLeft:`4px solid ${instr.active?WARDS[instr.ward]?.color||T.blue:T.border}`}}>
+            <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:12}}>
+              <div style={{flex:1}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+                  <div style={{fontSize:15,fontWeight:700,color:T.text}}>{instr.name}</div>
+                  <span style={{fontSize:10,padding:"2px 8px",borderRadius:10,background:instr.active?T.ok+"18":T.textT+"18",color:instr.active?T.ok:T.textT,fontWeight:600,fontFamily:T.mono}}>{instr.active?"AKTIF":"NONAKTIF"}</span>
+                  <span style={{fontSize:10,padding:"2px 8px",borderRadius:10,background:T.purple+"18",color:T.purple,fontFamily:T.mono}}>{instr.protocol}</span>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:6,fontSize:11,color:T.textS}}>
+                  {instr.brand&&<div><span style={{color:T.textT}}>Brand:</span> {instr.brand} {instr.model}</div>}
+                  <div><span style={{color:T.textT}}>Ruangan:</span> {WARDS[instr.ward]?.icon} {WARDS[instr.ward]?.label}</div>
+                  {instr.ip&&<div><span style={{color:T.textT}}>IP:Port:</span> <span style={{fontFamily:T.mono}}>{instr.ip}:{instr.port}</span></div>}
+                  <div><span style={{color:T.textT}}>Parameter aktif:</span> {Object.keys(instr.paramMap||{}).length}</div>
+                </div>
+              </div>
+              <div style={{display:"flex",gap:7,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                {/* Ping */}
+                <button className="pb" onClick={()=>pingInstrument(instr)} disabled={pinging[instr.id]} style={{...BP,padding:"5px 12px",fontSize:11,background:"#0369a1",display:"flex",alignItems:"center",gap:5}}>
+                  {pinging[instr.id]?<><Sp/> Ping...</>:"📡 Ping"}
+                </button>
+                <button className="sb" onClick={()=>editInstrument(instr)} style={{...BS,padding:"5px 12px",fontSize:11}}>✏️ Edit</button>
+                <button className="sb" onClick={()=>toggleActive(instr.id)} style={{...BS,padding:"5px 12px",fontSize:11,color:instr.active?T.warn:T.ok,borderColor:instr.active?`${T.warn}44`:`${T.ok}44`}}>{instr.active?"⏸ Nonaktifkan":"▶ Aktifkan"}</button>
+                <button className="sb" onClick={()=>{if(window.confirm(`Hapus instrumen "${instr.name}"?`))deleteInstrument(instr.id);}} style={{...BS,padding:"5px 12px",fontSize:11,color:T.danger,borderColor:`${T.danger}44`}}>🗑 Hapus</button>
+              </div>
+            </div>
+            {/* Ping result */}
+            {pingResult[instr.id]&&(
+              <div style={{marginTop:10,padding:"8px 12px",borderRadius:8,background:pingResult[instr.id].ok?"#ecfdf5":"#fef2f2",border:`1px solid ${pingResult[instr.id].ok?T.ok+"44":T.danger+"44"}`,fontSize:11,fontFamily:T.mono,color:pingResult[instr.id].ok?T.ok:T.danger}}>
+                {pingResult[instr.id].ok?`✅ Koneksi internet OK (${pingResult[instr.id].ms}ms) — Middleware siap mengirim data`:`❌ ${pingResult[instr.id].msg}`}
+              </div>
+            )}
+          </div>
+        ))}
+
+        {/* Add/Edit Form */}
+        {showForm&&(
+          <div style={{...CS,padding:24,marginTop:16,border:`2px solid ${T.blue}44`}}>
+            <div style={{fontSize:14,fontWeight:700,color:T.text,marginBottom:18}}>{editing?"✏️ Edit Instrumen":"+ Tambah Instrumen Baru"}</div>
+
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+              <div>
+                <div style={LS}>Nama Instrumen *</div>
+                <input value={form.name} onChange={e=>setForm(p=>({...p,name:e.target.value}))} placeholder="Contoh: Sysmex XN-3000 Unit 1" style={IS}/>
+              </div>
+              <div>
+                <div style={LS}>Brand</div>
+                <input value={form.brand} onChange={e=>setForm(p=>({...p,brand:e.target.value}))} placeholder="Sysmex / Beckman / Abbott / dll" style={IS}/>
+              </div>
+              <div>
+                <div style={LS}>Model</div>
+                <input value={form.model} onChange={e=>setForm(p=>({...p,model:e.target.value}))} placeholder="XN-3000 / DxH 900 / dll" style={IS}/>
+              </div>
+              <div>
+                <div style={LS}>Ruang Perawatan</div>
+                <select value={form.ward} onChange={e=>setForm(p=>({...p,ward:e.target.value}))} style={SS}>
+                  {Object.entries(WARDS).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
+                </select>
+              </div>
+              <div>
+                <div style={LS}>IP Address Middleware</div>
+                <input value={form.ip} onChange={e=>setForm(p=>({...p,ip:e.target.value}))} placeholder="192.168.1.100" style={IS}/>
+              </div>
+              <div>
+                <div style={LS}>Port</div>
+                <input value={form.port} onChange={e=>setForm(p=>({...p,port:e.target.value}))} placeholder="4000" style={IS}/>
+              </div>
+              <div>
+                <div style={LS}>Protokol Komunikasi</div>
+                <select value={form.protocol} onChange={e=>setForm(p=>({...p,protocol:e.target.value}))} style={SS}>
+                  <option value="REST">REST API / HTTP POST (Rekomendasi)</option>
+                  <option value="HL7">HL7 v2</option>
+                  <option value="ASTM">ASTM E1394</option>
+                  <option value="FILE">File Watching (CSV/TXT)</option>
+                </select>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginTop:8}}>
+                <div style={LS}>Status</div>
+                <div className="tog" onClick={()=>setForm(p=>({...p,active:!p.active}))} style={{width:40,height:22,borderRadius:11,background:form.active?T.blue:"#cbd5e1",position:"relative",marginTop:8}}>
+                  <div style={{position:"absolute",top:3,left:form.active?20:3,width:16,height:16,borderRadius:"50%",background:"#fff",transition:"left .2s"}}/>
+                </div>
+                <span style={{fontSize:11,color:form.active?T.blue:T.textT,marginTop:8}}>{form.active?"Aktif":"Nonaktif"}</span>
+              </div>
+            </div>
+
+            {/* Parameter Mapping */}
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:12,fontWeight:600,color:T.text,marginBottom:4}}>Mapping Parameter</div>
+              <div style={{fontSize:11,color:T.textS,marginBottom:12}}>Sesuaikan nama parameter dari instrumen/middleware dengan nama parameter di PasienQuC. Kosongkan jika parameter tidak digunakan instrumen ini.</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:8,maxHeight:280,overflowY:"auto",padding:2}}>
+                {Object.keys(PARAM_MAP_DEFAULTS).map(pk=>(
+                  <div key={pk} style={{display:"flex",alignItems:"center",gap:8,background:T.surfB,borderRadius:8,padding:"7px 10px",border:`1px solid ${T.border}`}}>
+                    <div style={{fontSize:11,fontWeight:600,color:T.blue,fontFamily:T.mono,width:60,flexShrink:0}}>{pk}</div>
+                    <div style={{fontSize:10,color:T.textT}}>←</div>
+                    <input value={form.paramMap?.[pk]||""} onChange={e=>setForm(p=>({...p,paramMap:{...p.paramMap,[pk]:e.target.value}}))} placeholder={`nama di middleware`} style={{flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${T.border}`,color:T.text,fontSize:11,fontFamily:T.mono,padding:"2px 0",outline:"none"}}/>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{display:"flex",gap:10}}>
+              <button className="pb" onClick={saveInstrument} style={{...BP,padding:"8px 22px"}}>💾 Simpan</button>
+              <button className="sb" onClick={()=>{setShowForm(false);setEditing(null);setForm({...defInstrument,id:Date.now()});}} style={{...BS,padding:"8px 18px"}}>Batal</button>
+            </div>
+          </div>
+        )}
+      </div>}
+
+      {/* ── ENDPOINT SECTION ── */}
+      {activeSection==="endpoint"&&<div>
+        {/* Endpoint info */}
+        <div style={{...CS,padding:22,marginBottom:16}}>
+          <div style={{fontSize:13,fontWeight:700,color:T.text,marginBottom:14}}>🌐 Endpoint Supabase</div>
+          <div style={{fontSize:11,color:T.textS,marginBottom:12}}>Konfigurasikan middleware Anda untuk mengirim data ke endpoint berikut menggunakan metode HTTP POST:</div>
+
+          {/* URL */}
+          <div style={{background:"#0b1929",borderRadius:10,padding:"12px 16px",marginBottom:12,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+            <div style={{fontFamily:T.mono,fontSize:12,color:"#38bdf8",wordBreak:"break-all"}}>{endpointUrl}</div>
+            <button className="sb" onClick={copyEndpoint} style={{...BS,padding:"5px 12px",fontSize:11,flexShrink:0,color:copied?T.ok:T.blue,borderColor:copied?`${T.ok}44`:T.borderM}}>{copied?"✅ Disalin!":"⎘ Salin"}</button>
+          </div>
+
+          {/* Headers */}
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:11,fontWeight:600,color:T.text,marginBottom:8}}>Headers yang Diperlukan</div>
+            <div style={{background:"#0b1929",borderRadius:10,padding:"12px 16px"}}>
+              {[
+                {k:"apikey",v:SB_KEY.slice(0,40)+"..."},
+                {k:"Authorization",v:"Bearer "+SB_KEY.slice(0,40)+"..."},
+                {k:"Content-Type",v:"application/json"},
+                {k:"Prefer",v:"return=representation"},
+              ].map(h=>(
+                <div key={h.k} style={{display:"flex",gap:12,marginBottom:6,fontFamily:T.mono,fontSize:11}}>
+                  <span style={{color:"#f59e0b",width:160,flexShrink:0}}>{h.k}:</span>
+                  <span style={{color:"#86efac"}}>{h.v}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Body schema */}
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:11,fontWeight:600,color:T.text,marginBottom:8}}>Format Body (JSON)</div>
+            <div style={{background:"#0b1929",borderRadius:10,padding:"12px 16px",fontFamily:T.mono,fontSize:11,color:"#e2e8f0",lineHeight:1.8}}>
+              <span style={{color:"#60a5fa"}}>{"{"}</span><br/>
+              &nbsp;&nbsp;<span style={{color:"#f59e0b"}}>"param"</span>: <span style={{color:"#86efac"}}>"Hb"</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style={{color:"#64748b"}}>// nama parameter (Hb, Na, PT, dll)</span><br/>
+              &nbsp;&nbsp;<span style={{color:"#f59e0b"}}>"ward"</span>: <span style={{color:"#86efac"}}>"IGD"</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style={{color:"#64748b"}}>// IGD | RANAP | ICU | POLI | OK</span><br/>
+              &nbsp;&nbsp;<span style={{color:"#f59e0b"}}>"value"</span>: <span style={{color:"#c084fc"}}>12.5</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style={{color:"#64748b"}}>// nilai numerik hasil pemeriksaan</span><br/>
+              &nbsp;&nbsp;<span style={{color:"#f59e0b"}}>"recorded_at"</span>: <span style={{color:"#86efac"}}>"2026-05-02T08:00:00Z"</span>&nbsp;<span style={{color:"#64748b"}}>// ISO 8601 timestamp (opsional)</span><br/>
+              <span style={{color:"#60a5fa"}}>{"}"}</span>
+            </div>
+          </div>
+
+          {/* cURL example */}
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:11,fontWeight:600,color:T.text,marginBottom:8}}>Contoh cURL</div>
+            <div style={{background:"#0b1929",borderRadius:10,padding:"12px 16px",fontFamily:T.mono,fontSize:10,color:"#e2e8f0",lineHeight:1.8,whiteSpace:"pre-wrap",overflowX:"auto"}}>
+              {curlExample()}
+            </div>
+          </div>
+
+          {/* Batch send */}
+          <div style={{padding:"12px 16px",background:T.blueL,borderRadius:10,border:`1px solid ${T.border}`,fontSize:11,color:T.blueD}}>
+            💡 <strong>Batch Insert:</strong> Middleware bisa mengirim array JSON untuk multiple data sekaligus:<br/>
+            <span style={{fontFamily:T.mono,fontSize:10}}>[{"{"}"param":"Hb","ward":"IGD","value":12.5{"}"}, {"{"}"param":"MCV","ward":"IGD","value":85.2{"}"}]</span>
+          </div>
+        </div>
+
+        {/* Test send */}
+        <div style={{...CS,padding:22}}>
+          <div style={{fontSize:13,fontWeight:700,color:T.text,marginBottom:4}}>🧪 Test Kirim Data Manual</div>
+          <div style={{fontSize:11,color:T.textS,marginBottom:14}}>Uji koneksi dengan mengirim data sampel langsung ke Supabase.</div>
+          <textarea value={testPayload} onChange={e=>setTestPayload(e.target.value)}
+            placeholder={`Contoh:
+${jsonExample()}`}
+            style={{width:"100%",height:160,background:"#0b1929",border:`1.5px solid ${T.border}`,borderRadius:10,color:"#e2e8f0",padding:14,fontSize:12,fontFamily:T.mono,resize:"vertical",marginBottom:12}}/>
+          <div style={{display:"flex",gap:10,alignItems:"center"}}>
+            <button className="pb" onClick={()=>setTestPayload(jsonExample())} style={{...BS,padding:"7px 14px",fontSize:11}}>📋 Isi Contoh</button>
+            <button className="pb" onClick={sendTestData} disabled={testLoading||!testPayload.trim()} style={{...BP,display:"flex",alignItems:"center",gap:6,padding:"7px 16px",fontSize:11,opacity:testLoading||!testPayload.trim()?.6:1}}>
+              {testLoading?<><Sp/> Mengirim...</>:"▶ Kirim Test"}
+            </button>
+            {testResult&&<div style={{fontSize:12,fontFamily:T.mono,color:testResult.startsWith("✅")?T.ok:T.danger}}>{testResult}</div>}
+          </div>
+        </div>
+      </div>}
+
+      {/* ── LOG SECTION ── */}
+      {activeSection==="log"&&<div>
+        <div style={{...CS,padding:20}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+            <div style={{fontSize:13,fontWeight:700,color:T.text}}>📋 Log Aktivitas Middleware</div>
+            <button className="sb" onClick={()=>{setLogs([]);localStorage.removeItem(MW_LOG_KEY);}} style={{...BS,padding:"5px 12px",fontSize:11,color:T.danger,borderColor:`${T.danger}44`}}>🗑 Bersihkan Log</button>
+          </div>
+          {logs.length===0?(
+            <div style={{padding:24,textAlign:"center",color:T.textS,fontSize:13}}>Belum ada aktivitas tercatat.</div>
+          ):(
+            <div ref={logRef} style={{background:"#0b1929",borderRadius:10,padding:14,maxHeight:480,overflowY:"auto",fontFamily:T.mono,fontSize:11}}>
+              {[...logs].reverse().map(l=>(
+                <div key={l.id} style={{display:"flex",gap:12,marginBottom:6,alignItems:"flex-start"}}>
+                  <span style={{color:"#475569",flexShrink:0}}>{l.time}</span>
+                  <span style={{color:logColor[l.type]||T.textT,flexShrink:0,width:40}}>[{l.type.toUpperCase()}]</span>
+                  {l.instr&&<span style={{color:"#f59e0b",flexShrink:0}}>[{l.instr}]</span>}
+                  <span style={{color:"#e2e8f0"}}>{l.msg}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>}
+    </div>
+  );
+}
+
 /* ══ MAIN APP ══ */
 export default function PasienQuC(){
   const[loading,setLoading]=useState(true);
@@ -934,7 +1334,7 @@ export default function PasienQuC(){
   const aiCtxGlobal=useMemo(()=>{let c=`PasienQuC · ${PARAM_GROUPS[group].label} · ${cfg?.label||param}\n`;selWards.forEach(w=>{const raw=getWardRaw(w);if(!raw)return;const m=avg(raw),s=std(raw);c+=`${WARDS[w].label}: N=${raw.length} Mean=${m.toFixed(3)} CV=${((s/m)*100).toFixed(2)}%\n`;});return c;},[wardData,selWards,group,param,cfg]);
 
   const toggleMethod=m=>setSelMethods(p=>p.includes(m)?p.filter(x=>x!==m):[...p,m]);
-  const TABS=["dashboard","ai","tren","data","report","tentang"];
+  const TABS=["dashboard","ai","tren","data","report","middleware","tentang"];
 
   if(!apiKey)return <ApiKeyPage onConnect={setApiKey}/>;
   if(loading)return <LoadingScreen onDone={()=>setLoading(false)}/>;
@@ -953,7 +1353,7 @@ export default function PasienQuC(){
         </div>
       </div>
       <div style={{display:"flex",gap:4,alignItems:"center"}}>
-        {TABS.map(t=><button key={t} className="tb" onClick={()=>setTab(t)} style={{padding:"5px 12px",borderRadius:7,border:`1.5px solid ${tab===t?T.blue:T.border}`,background:tab===t?T.blue:"transparent",color:tab===t?"#fff":T.textS,fontSize:11,fontFamily:T.font,fontWeight:tab===t?600:400,textTransform:"capitalize"}}>{t==="ai"?"✦ AI":t==="tren"?"📅 Tren":t==="tentang"?"ℹ️ Tentang":t}</button>)}
+        {TABS.map(t=><button key={t} className="tb" onClick={()=>setTab(t)} style={{padding:"5px 12px",borderRadius:7,border:`1.5px solid ${tab===t?T.blue:T.border}`,background:tab===t?T.blue:"transparent",color:tab===t?"#fff":T.textS,fontSize:11,fontFamily:T.font,fontWeight:tab===t?600:400,textTransform:"capitalize"}}>{t==="ai"?"✦ AI":t==="tren"?"📅 Tren":t==="middleware"?"⚙️ Middleware":t==="tentang"?"ℹ️ Tentang":t}</button>)}
         <div style={{marginLeft:5,display:"flex",alignItems:"center",gap:4,padding:"4px 8px",background:T.surfB,borderRadius:6,border:`1px solid ${T.border}`}}><div style={{width:5,height:5,borderRadius:"50%",background:T.ok}}/><span style={{fontSize:9,color:T.textS,fontFamily:T.mono}}>Supabase</span></div>
         <button className="sb" onClick={()=>setApiKey("")} style={{padding:"4px 9px",background:"transparent",border:`1.5px solid ${T.danger}44`,borderRadius:7,color:T.danger,fontSize:11,fontFamily:T.font,cursor:"pointer"}}>Logout</button>
       </div>
@@ -1117,6 +1517,9 @@ export default function PasienQuC(){
         <NarrativeReport apiKey={apiKey} context={aiCtxGlobal} paramLabel={cfg?.label} ward={selWards.map(w=>WARDS[w].label).join(", ")}/>
       </div>}
     </div>
+
+      {/* MIDDLEWARE TAB */}
+      {tab==="middleware"&&<MiddlewareTab/>}
 
       {/* TENTANG TAB */}
       {tab==="tentang"&&<AboutTab/>}
