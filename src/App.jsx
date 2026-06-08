@@ -120,39 +120,88 @@ const calcMed=(v,n)=>v.map((_,i)=>i<n-1?null:+med(v.slice(i-n+1,i+1)).toFixed(3)
 const getLimits=(v,mult)=>{const vals=v.filter(x=>x!==null),m=avg(vals),s=std(vals);return{target:m,ucl:m+mult*s,lcl:m-mult*s,sd:s};};
 
 /* ══ WESTGARD RULES ══ */
-function checkWestgard(values, mean, sd) {
+/* ══ SIGMA TIER SYSTEM ══ */
+// Get sigma tier and recommended Westgard rules based on sigma value
+function getSigmaTier(sigma) {
+  if (sigma >= 6) return {
+    tier: "A", label: "World Class", color: "#059669", bg: "#ecfdf5",
+    border: "#6ee7b7",
+    rules: ["1₃s"],
+    activeRules: { "1₂s": false, "1₃s": true, "2₂s": false, "R₄s": false, "4₁s": false, "10x": false },
+    qcLevels: 2, qcFreq: "1×/hari",
+    description: "Hanya 1₃s diperlukan. QC minimal sudah cukup.",
+  };
+  if (sigma >= 5) return {
+    tier: "B", label: "Excellent", color: "#0ea5e9", bg: "#e0f2fe",
+    border: "#7dd3fc",
+    rules: ["1₂s","1₃s"],
+    activeRules: { "1₂s": true, "1₃s": true, "2₂s": false, "R₄s": false, "4₁s": false, "10x": false },
+    qcLevels: 2, qcFreq: "1×/hari",
+    description: "1₂s sebagai warning, 1₃s sebagai reject.",
+  };
+  if (sigma >= 4) return {
+    tier: "C", label: "Good", color: "#2563eb", bg: "#eff6ff",
+    border: "#93c5fd",
+    rules: ["1₂s","1₃s","2₂s","R₄s"],
+    activeRules: { "1₂s": true, "1₃s": true, "2₂s": true, "R₄s": true, "4₁s": false, "10x": false },
+    qcLevels: 2, qcFreq: "2×/hari",
+    description: "Westgard multirule standar: 1₂s·2₂s·R₄s.",
+  };
+  if (sigma >= 3) return {
+    tier: "D", label: "Marginal", color: "#d97706", bg: "#fffbeb",
+    border: "#fcd34d",
+    rules: ["1₂s","1₃s","2₂s","R₄s","4₁s","10x"],
+    activeRules: { "1₂s": true, "1₃s": true, "2₂s": true, "R₄s": true, "4₁s": true, "10x": true },
+    qcLevels: 3, qcFreq: "4×/hari",
+    description: "Semua rules aktif. QC ketat, 3 level kontrol.",
+  };
+  return {
+    tier: "E", label: "Poor / Unacceptable", color: "#dc2626", bg: "#fef2f2",
+    border: "#fca5a5",
+    rules: ["1₂s","1₃s","2₂s","R₄s","4₁s","10x"],
+    activeRules: { "1₂s": true, "1₃s": true, "2₂s": true, "R₄s": true, "4₁s": true, "10x": true },
+    qcLevels: 3, qcFreq: "6×/hari",
+    description: "Performa tidak acceptable. Investigasi metode diperlukan sebelum QC.",
+  };
+}
+
+// Sigma-aware Westgard checker
+function checkWestgard(values, mean, sd, sigmaTier) {
   const violations = [];
   const n = values.length;
   if (n === 0) return violations;
+  // Which rules are active based on sigma tier
+  const active = sigmaTier?.activeRules || {
+    "1₂s": true, "1₃s": true, "2₂s": true, "R₄s": true, "4₁s": true, "10x": true
+  };
 
   for (let i = 0; i < n; i++) {
     const v = values[i];
     const z = (v - mean) / sd;
     const rules = [];
 
-    // 1_2s — warning
-    if (Math.abs(z) > 2) rules.push({ rule: "1₂s", type: "warning", desc: "1 titik > ±2SD (warning)" });
-    // 1_3s — rejection
-    if (Math.abs(z) > 3) rules.push({ rule: "1₃s", type: "reject", desc: "1 titik > ±3SD (reject)" });
+    if (active["1₂s"] && Math.abs(z) > 2 && Math.abs(z) <= 3)
+      rules.push({ rule: "1₂s", type: "warning", desc: "1 titik > ±2SD (warning)" });
+    if (active["1₃s"] && Math.abs(z) > 3)
+      rules.push({ rule: "1₃s", type: "reject", desc: "1 titik > ±3SD (reject)" });
 
-    // 2_2s — 2 consecutive > 2SD same side
     if (i >= 1) {
       const z1 = (values[i-1] - mean) / sd;
-      if (z > 2 && z1 > 2) rules.push({ rule: "2₂s", type: "reject", desc: "2 berturut > +2SD" });
-      if (z < -2 && z1 < -2) rules.push({ rule: "2₂s", type: "reject", desc: "2 berturut < -2SD" });
-      // R_4s — range > 4SD
-      if (Math.abs(z - z1) > 4) rules.push({ rule: "R₄s", type: "reject", desc: "Range 2 titik berturut > 4SD" });
+      if (active["2₂s"]) {
+        if (z > 2 && z1 > 2) rules.push({ rule: "2₂s", type: "reject", desc: "2 berturut > +2SD" });
+        if (z < -2 && z1 < -2) rules.push({ rule: "2₂s", type: "reject", desc: "2 berturut < -2SD" });
+      }
+      if (active["R₄s"] && Math.abs(z - z1) > 4)
+        rules.push({ rule: "R₄s", type: "reject", desc: "Range 2 titik berturut > 4SD" });
     }
 
-    // 4_1s — 4 consecutive > 1SD same side
-    if (i >= 3) {
+    if (active["4₁s"] && i >= 3) {
       const zs = [values[i],values[i-1],values[i-2],values[i-3]].map(x=>(x-mean)/sd);
       if (zs.every(z=>z>1)) rules.push({ rule: "4₁s", type: "reject", desc: "4 berturut > +1SD" });
       if (zs.every(z=>z<-1)) rules.push({ rule: "4₁s", type: "reject", desc: "4 berturut < -1SD" });
     }
 
-    // 10x — 10 consecutive same side of mean
-    if (i >= 9) {
+    if (active["10x"] && i >= 9) {
       const zs = values.slice(i-9, i+1).map(x=>(x-mean)/sd);
       if (zs.every(z=>z>0)) rules.push({ rule: "10x", type: "reject", desc: "10 berturut di atas mean" });
       if (zs.every(z=>z<0)) rules.push({ rule: "10x", type: "reject", desc: "10 berturut di bawah mean" });
@@ -161,15 +210,6 @@ function checkWestgard(values, mean, sd) {
     if (rules.length > 0) violations.push({ idx: i, value: v, z: +z.toFixed(2), rules });
   }
   return violations;
-}
-
-/* ══ LJ ZONE COLOR ══ */
-function ljColor(z) {
-  const az = Math.abs(z);
-  if (az > 3) return T.danger;
-  if (az > 2) return T.warn;
-  if (az > 1) return "#f97316";
-  return T.ok;
 }
 
 /* ══ DEMO DATA ══ */
@@ -332,7 +372,7 @@ function GroupSel({selected,onChange}){
 }
 
 /* ══ LEVEY-JENNINGS CHART ══ */
-function LJChart({values, mean, sdVal, paramLabel, wardLabel, unit, violations}){
+function LJChart({values, mean, sdVal, paramLabel, wardLabel, unit, violations, sigmaTier}){
   const violSet=new Set(violations.map(v=>v.idx));
   const rejectSet=new Set(violations.filter(v=>v.rules.some(r=>r.type==="reject")).map(v=>v.idx));
 
@@ -382,7 +422,8 @@ function LJChart({values, mean, sdVal, paramLabel, wardLabel, unit, violations})
     if(cx==null||cy==null)return null;
     const isViol=violSet.has(payload.idx-1);
     const isRej=rejectSet.has(payload.idx-1);
-    const color=isRej?T.danger:isViol?T.warn:T.blue;
+    // Color based on sigma tier if available
+    const color=isRej?T.danger:isViol?T.warn:T.ok;
     const r=isRej?6:isViol?5:3.5;
     return<circle cx={cx} cy={cy} r={r} fill={color} stroke="#fff" strokeWidth={1.5}/>;
   };
@@ -842,6 +883,227 @@ function PBRTQCChart({chartData,selMethods,limits,cfg,paramLabel,TT,yDomain}){
   );
 }
 
+
+/* ══ SIGMA CALCULATOR PANEL ══ */
+const SIGMA_STORAGE = "pasienquc_sigma_settings";
+
+function loadSigmaSettings() {
+  try { return JSON.parse(localStorage.getItem(SIGMA_STORAGE)) || {}; } catch { return {}; }
+}
+function saveSigmaSettings(key, val) {
+  try {
+    const s = loadSigmaSettings();
+    s[key] = val;
+    localStorage.setItem(SIGMA_STORAGE, JSON.stringify(s));
+  } catch {}
+}
+
+function SigmaPanel({ param, ward, cfg, stats, onSigmaChange, paramLabel }) {
+  const storageKey = `${param}_${ward}`;
+  const saved = loadSigmaSettings()[storageKey] || {};
+
+  const [tea,  setTea]  = useState(saved.tea  ?? cfg.tea  ?? 5.0);
+  const [bias, setBias] = useState(saved.bias ?? 0.5);
+  const [cvOverride, setCvOverride] = useState(saved.cvOverride ?? "");
+  const [expanded, setExpanded] = useState(true);
+
+  // CV: use override if set, else from data
+  const cvFromData = stats ? +stats.cv.toFixed(2) : null;
+  const cv = cvOverride !== "" ? parseFloat(cvOverride) : (cvFromData || 3.0);
+  const sigma = +((tea - Math.abs(bias)) / cv).toFixed(2);
+  const tier = getSigmaTier(sigma);
+
+  // Fire immediately on mount + whenever values change
+  useEffect(() => {
+    saveSigmaSettings(storageKey, { tea, bias, cvOverride });
+    onSigmaChange && onSigmaChange(sigma, tier);
+  }, [tea, bias, cvOverride, sigma, storageKey]);
+
+  const sliderRow = (label, val, set, min, max, step, hint) => (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
+        <span style={{ fontSize: 12, color: T.textS }}>{label}</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: T.blue, fontFamily: T.mono }}>{val.toFixed(2)}{hint}</span>
+      </div>
+      <input type="range" min={min} max={max} step={step} value={val}
+        onChange={e => set(+e.target.value)}
+        style={{ width: "100%", accentColor: T.blue, height: 4 }} />
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: T.textT, fontFamily: T.mono, marginTop: 2 }}>
+        <span>{min}{hint}</span><span>{max}{hint}</span>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ ...CS, padding: 0, overflow: "hidden", marginBottom: 16 }}>
+      {/* Header */}
+      <div onClick={() => setExpanded(!expanded)} style={{
+        padding: "14px 20px", cursor: "pointer",
+        background: `linear-gradient(135deg, ${tier.bg}, #fff)`,
+        borderBottom: expanded ? `1.5px solid ${tier.border}` : "none",
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        transition: "background 0.3s",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ width: 42, height: 42, borderRadius: 12, background: tier.color, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <span style={{ fontSize: 20, fontWeight: 800, color: "#fff", fontFamily: T.mono }}>{tier.tier}</span>
+          </div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: T.text }}>σ Sigma Metric & Six Sigma QC Design</div>
+            <div style={{ fontSize: 11, color: T.textS }}>{paramLabel || param} · {ward}</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          {/* Sigma badge */}
+          <div style={{ textAlign: "center", padding: "6px 16px", borderRadius: 10, background: tier.color + "18", border: `1.5px solid ${tier.color}44` }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: tier.color, fontFamily: T.mono, lineHeight: 1 }}>{sigma}σ</div>
+            <div style={{ fontSize: 10, fontWeight: 600, color: tier.color }}>{tier.label}</div>
+          </div>
+          <span style={{ fontSize: 16, color: T.textT }}>{expanded ? "▲" : "▼"}</span>
+        </div>
+      </div>
+
+      {expanded && (
+        <div style={{ padding: "20px 22px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+            {/* Left: inputs */}
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.blueD, letterSpacing: 1.5, textTransform: "uppercase", fontFamily: T.mono, marginBottom: 14 }}>Parameter Input</div>
+
+              {sliderRow("TEa — Total Allowable Error (%)", tea, setTea, 0.5, 25, 0.1, "%")}
+              {sliderRow("Bias (%) — Inaccuracy", bias, setBias, 0, 15, 0.1, "%")}
+
+              {/* CV: auto from data or manual override */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, color: T.textS }}>CV (%) — Imprecision</span>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    {cvFromData !== null && (
+                      <button onClick={() => setCvOverride("")}
+                        style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, border: `1px solid ${cvOverride === "" ? T.blue : T.border}`, background: cvOverride === "" ? T.blueL : "transparent", color: cvOverride === "" ? T.blueD : T.textT, cursor: "pointer", fontFamily: T.mono }}>
+                        Auto ({cvFromData}%)
+                      </button>
+                    )}
+                    <span style={{ fontSize: 13, fontWeight: 700, color: T.blue, fontFamily: T.mono }}>{cv.toFixed(2)}%</span>
+                  </div>
+                </div>
+                <input type="number" min={0.1} max={30} step={0.01}
+                  value={cvOverride}
+                  onChange={e => setCvOverride(e.target.value)}
+                  placeholder={cvFromData ? `Auto: ${cvFromData}%` : "Masukkan CV%"}
+                  style={{ ...IS, fontSize: 12 }} />
+                <div style={{ fontSize: 10, color: T.textT, fontFamily: T.mono, marginTop: 3 }}>
+                  {cvOverride === "" && cvFromData ? "✅ CV dihitung otomatis dari data" : "✏️ CV diinput manual"}
+                </div>
+              </div>
+
+              {/* Formula display */}
+              <div style={{ background: tier.bg, border: `1.5px solid ${tier.border}`, borderRadius: 10, padding: "12px 14px" }}>
+                <div style={{ fontSize: 10, color: T.textT, fontFamily: T.mono, marginBottom: 6, letterSpacing: 1 }}>FORMULA SIGMA</div>
+                <div style={{ fontSize: 13, fontFamily: T.mono, color: T.text, lineHeight: 1.9 }}>
+                  σ = (TEa − |Bias|) / CV<br />
+                  σ = ({tea.toFixed(1)}% − {Math.abs(bias).toFixed(1)}%) / {cv.toFixed(2)}%<br />
+                  <span style={{ fontWeight: 800, color: tier.color, fontSize: 15 }}>σ = {sigma}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Right: sigma tier info */}
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.blueD, letterSpacing: 1.5, textTransform: "uppercase", fontFamily: T.mono, marginBottom: 14 }}>QC Strategy</div>
+
+              {/* Tier cards */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 7, marginBottom: 16 }}>
+                {[
+                  { range: "≥ 6σ", label: "World Class", color: "#059669", rules: "1₃s", levels: "2 level", freq: "1×/hari" },
+                  { range: "5–6σ", label: "Excellent",   color: "#0ea5e9", rules: "1₂s · 1₃s", levels: "2 level", freq: "1×/hari" },
+                  { range: "4–5σ", label: "Good",        color: "#2563eb", rules: "1₂s · 2₂s · R₄s", levels: "2 level", freq: "2×/hari" },
+                  { range: "3–4σ", label: "Marginal",    color: "#d97706", rules: "Semua rules", levels: "3 level", freq: "4×/hari" },
+                  { range: "< 3σ", label: "Poor",        color: "#dc2626", rules: "Semua rules", levels: "3 level", freq: "6×/hari" },
+                ].map(r => {
+                  const active = (
+                    (r.range === "≥ 6σ" && sigma >= 6) ||
+                    (r.range === "5–6σ" && sigma >= 5 && sigma < 6) ||
+                    (r.range === "4–5σ" && sigma >= 4 && sigma < 5) ||
+                    (r.range === "3–4σ" && sigma >= 3 && sigma < 4) ||
+                    (r.range === "< 3σ" && sigma < 3)
+                  );
+                  return (
+                    <div key={r.range} style={{
+                      padding: "10px 14px", borderRadius: 9,
+                      background: active ? r.color + "12" : T.surfB,
+                      border: `1.5px solid ${active ? r.color : T.border}`,
+                      display: "grid", gridTemplateColumns: "50px 1fr 80px 70px 60px",
+                      alignItems: "center", gap: 8, transition: "all 0.2s",
+                    }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: r.color, fontFamily: T.mono }}>{r.range}</div>
+                      <div style={{ fontSize: 11, fontWeight: active ? 700 : 400, color: active ? r.color : T.textS }}>{r.label}</div>
+                      <div style={{ fontSize: 10, color: T.textT, fontFamily: T.mono }}>{r.rules}</div>
+                      <div style={{ fontSize: 10, color: T.textT, fontFamily: T.mono }}>{r.levels}</div>
+                      <div style={{ fontSize: 10, color: T.textT, fontFamily: T.mono }}>{r.freq}</div>
+                      {active && <div style={{ gridColumn: "1/-1", fontSize: 11, color: r.color, marginTop: 3, fontWeight: 600 }}>
+                        ← Posisi saat ini · {tier.description}
+                      </div>}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Active rules indicator */}
+              <div style={{ background: T.surfB, borderRadius: 10, padding: "12px 14px", border: `1.5px solid ${T.border}` }}>
+                <div style={{ fontSize: 10, color: T.textT, fontFamily: T.mono, marginBottom: 8, letterSpacing: 1 }}>RULES AKTIF UNTUK σ = {sigma}</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {Object.entries(tier.activeRules).map(([rule, active]) => (
+                    <span key={rule} style={{
+                      padding: "3px 10px", borderRadius: 20, fontFamily: T.mono, fontSize: 11, fontWeight: 600,
+                      background: active ? tier.color + "18" : "#f1f5f9",
+                      color: active ? tier.color : T.textT,
+                      border: `1px solid ${active ? tier.color + "44" : T.border}`,
+                      textDecoration: active ? "none" : "line-through",
+                    }}>{rule}</span>
+                  ))}
+                </div>
+                <div style={{ fontSize: 10, color: T.textT, marginTop: 8, lineHeight: 1.6 }}>
+                  QC: <strong>{tier.qcLevels} level kontrol</strong> · <strong>{tier.qcFreq}</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* TEa reference table */}
+          <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${T.border}` }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: T.text, marginBottom: 10 }}>Referensi TEa Standar (CLIA / Westgard)</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px,1fr))", gap: 6 }}>
+              {[
+                { param: "Hb", tea: 7.0, source: "CLIA" },
+                { param: "MCV", tea: 7.0, source: "CLIA" },
+                { param: "PLT", tea: 25.0, source: "CLIA" },
+                { param: "WBC", tea: 15.0, source: "CLIA" },
+                { param: "Na", tea: 4.0, source: "CLIA" },
+                { param: "K", tea: 8.6, source: "CLIA" },
+                { param: "Glukosa", tea: 10.0, source: "CLIA" },
+                { param: "Kreatinin", tea: 15.0, source: "CLIA" },
+                { param: "Albumin", tea: 10.0, source: "CLIA" },
+                { param: "PT", tea: 15.0, source: "Westgard" },
+                { param: "APTT", tea: 15.0, source: "Westgard" },
+                { param: "pH (AGD)", tea: 0.04, source: "CLIA" },
+                { param: "pCO2", tea: 8.0, source: "CLIA" },
+                { param: "CRP", tea: 25.0, source: "Westgard" },
+              ].map(r => (
+                <div key={r.param} style={{ display: "flex", justifyContent: "space-between", padding: "5px 10px", borderRadius: 7, background: r.param === param ? T.blueL : T.surfB, border: `1px solid ${r.param === param ? T.blue + "44" : T.border}`, fontSize: 11 }}>
+                  <span style={{ fontWeight: r.param === param ? 700 : 400, color: r.param === param ? T.blueD : T.text, fontFamily: T.mono }}>{r.param}</span>
+                  <span style={{ color: T.textS, fontFamily: T.mono }}>TEa {r.tea}%</span>
+                  <span style={{ color: T.textT, fontSize: 10 }}>{r.source}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ══ MAIN QC PANEL ══ */
 function QCPanel({data,cfg,blockSize,mult,useAoN,selMethods,apiKey,wardKey,wardLabel,paramLabel,param,onSave}){
   const working=useMemo(()=>!data?null:useAoN?data.filter(v=>v>=cfg.refLow&&v<=cfg.refHigh):data,[data,useAoN,cfg]);
@@ -850,7 +1112,20 @@ function QCPanel({data,cfg,blockSize,mult,useAoN,selMethods,apiKey,wardKey,wardL
   const violations=useMemo(()=>{if(!series||!limits)return null;const o={};Object.keys(series).forEach(m=>{o[m]=series[m].map((v,i)=>({idx:i,value:v,viol:v!==null&&(v>limits[m].ucl||v<limits[m].lcl)})).filter(d=>d.viol);});return o;},[series,limits]);
   const stats=useMemo(()=>{if(!working||!working.length)return null;const m=avg(working),s=std(working);return{n:working.length,mean:m,sd:s,cv:(s/m)*100,median:med(working)};},[working]);
   const ljMean=stats?.mean||0,ljSd=stats?.sd||1;
-  const wgViolations=useMemo(()=>working?checkWestgard(working,ljMean,ljSd):[],[working,ljMean,ljSd]);
+  // Init sigma from saved/default values so stat card shows immediately
+  const _initSigma=(()=>{
+    const sk=`${param}_${wardKey}`;
+    const sv=loadSigmaSettings()[sk]||{};
+    const tea=sv.tea??cfg.tea??5.0;
+    const bias=sv.bias??0.5;
+    const cvDef=sv.cvOverride?parseFloat(sv.cvOverride):3.0;
+    const sig=+((tea-Math.abs(bias))/cvDef).toFixed(2);
+    return{sig,tier:getSigmaTier(sig)};
+  })();
+  const[sigmaCurrent,setSigmaCurrent]=useState(_initSigma.sig);
+  const[sigmaTierCurrent,setSigmaTierCurrent]=useState(_initSigma.tier);
+  const handleSigmaChange=useCallback((sig,tier)=>{setSigmaCurrent(sig);setSigmaTierCurrent(tier);},[]);
+  const wgViolations=useMemo(()=>working?checkWestgard(working,ljMean,ljSd,sigmaTierCurrent):[],[working,ljMean,ljSd,sigmaTierCurrent]);
   const chartData=useMemo(()=>{if(!working||!series)return[];return working.map((v,i)=>{const p={idx:i+1,raw:+v.toFixed(3)};Object.keys(series).forEach(m=>{if(series[m][i]!==null)p[m]=series[m][i];});return p;});},[working,series]);
 
   const aiCtx=useMemo(()=>{
@@ -859,9 +1134,13 @@ function QCPanel({data,cfg,blockSize,mult,useAoN,selMethods,apiKey,wardKey,wardL
     selMethods.forEach(m=>{if(limits[m])c+=`${METHODS[m].label}: UCL=${limits[m].ucl.toFixed(3)} LCL=${limits[m].lcl.toFixed(3)} Violations=${violations?.[m]?.length??0}\n`;});
     const rejects=wgViolations.filter(v=>v.rules.some(r=>r.type==="reject"));
     c+=`Westgard: Total=${wgViolations.length} Reject=${rejects.length}\n`;
-    return c;
-  },[stats,limits,violations,selMethods,paramLabel,cfg,wardLabel,wgViolations]);
+    if(sigmaCurrent)c+=(["Sigma:",sigmaCurrent,"sigma |",(sigmaTierCurrent?.label||"")].join(" ")+";");
 
+    return c;
+  },[stats,limits,violations,selMethods,paramLabel,cfg,wardLabel,wgViolations,sigmaCurrent,sigmaTierCurrent]);
+
+  // When stats loads for first time, trigger sigma recalc via SigmaPanel
+  // SigmaPanel handles this internally via cvFromData dependency
   const[saving,setSaving]=useState(false),[savedMsg,setSavedMsg]=useState("");
   const saveToDb=async()=>{
     if(!working||!stats)return;
@@ -887,12 +1166,13 @@ function QCPanel({data,cfg,blockSize,mult,useAoN,selMethods,apiKey,wardKey,wardL
 
   return(<div>
     {/* Stats */}
-    {stats&&<div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:9,marginBottom:16}}>
+    {stats&&<div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:9,marginBottom:16}}>
       <StatCard label="N" value={stats.n} unit="data" color={T.blue} delay={0}/>
-      <StatCard label="Mean" value={stats.mean.toFixed(2)} unit={cfg.unit} color={T.blue} delay={50}/>
-      <StatCard label="SD" value={stats.sd.toFixed(3)} unit="" color={T.ok} delay={100}/>
-      <StatCard label="CV%" value={stats.cv.toFixed(2)+"%"} unit="" color={stats.cv>10?T.danger:T.warn} warn={stats.cv>10} delay={150}/>
-      <StatCard label="WG Violations" value={wgViolations.filter(v=>v.rules.some(r=>r.type==="reject")).length} unit="rejections" color={T.danger} warn={wgViolations.some(v=>v.rules.some(r=>r.type==="reject"))} delay={200}/>
+      <StatCard label="Mean" value={stats.mean.toFixed(2)} unit={cfg.unit} color={T.blue} delay={40}/>
+      <StatCard label="SD" value={stats.sd.toFixed(3)} unit="" color={T.ok} delay={80}/>
+      <StatCard label="CV%" value={stats.cv.toFixed(2)+"%"} unit="" color={stats.cv>10?T.danger:T.warn} warn={stats.cv>10} delay={120}/>
+      <StatCard label="Sigma (σ)" value={sigmaCurrent!==null?sigmaCurrent+"σ":"—"} unit={sigmaTierCurrent?.label||"Set TEa & Bias ↓"} color={sigmaTierCurrent?.color||T.textT} warn={sigmaCurrent!==null&&sigmaCurrent<3} delay={160}/>
+      <StatCard label="WG Reject" value={wgViolations.filter(v=>v.rules.some(r=>r.type==="reject")).length} unit="violations" color={T.danger} warn={wgViolations.some(v=>v.rules.some(r=>r.type==="reject"))} delay={200}/>
     </div>}
 
     {/* Save to Supabase */}
@@ -903,8 +1183,11 @@ function QCPanel({data,cfg,blockSize,mult,useAoN,selMethods,apiKey,wardKey,wardL
       {savedMsg&&<div style={{fontSize:12,color:savedMsg.startsWith("✅")?T.ok:T.danger,fontFamily:T.mono}}>{savedMsg}</div>}
     </div>
 
+    {/* Sigma Panel */}
+    <SigmaPanel param={param} ward={wardKey} cfg={cfg} stats={stats} onSigmaChange={handleSigmaChange} paramLabel={paramLabel}/>
+
     {/* Levey-Jennings Chart */}
-    {stats&&<div style={{marginBottom:16}}><LJChart values={working} mean={stats.mean} sdVal={stats.sd} paramLabel={paramLabel} wardLabel={wardLabel} unit={cfg.unit} violations={wgViolations}/></div>}
+    {stats&&<div style={{marginBottom:16}}><LJChart values={working} mean={stats.mean} sdVal={stats.sd} paramLabel={paramLabel} wardLabel={wardLabel} unit={cfg.unit} violations={wgViolations} sigmaTier={sigmaTierCurrent}/></div>}
 
     {/* PBRTQC Chart */}
     {chartData.length>0&&series&&limits&&(()=>{
