@@ -184,11 +184,82 @@ function genDemo(cfg,ward,n=120){
   });
 }
 
+// Parse numeric string — handle both comma (134,7) and dot (134.7) as decimal
+function parseNum(s){
+  if(s==null||s==="")return NaN;
+  // Replace comma-decimal: "134,7" → "134.7" but only if comma is decimal separator
+  // Detect: if string matches pattern digits,digits (no dot) → comma is decimal
+  const cleaned=s.trim().replace(/\s/g,"");
+  // Pattern: optional minus, digits, comma, digits (European decimal)
+  if(/^-?\d+,\d+$/.test(cleaned)){
+    return parseFloat(cleaned.replace(",","."));
+  }
+  // Already dot-decimal or integer
+  return parseFloat(cleaned.replace(",","."));
+}
+
+// Label aliases: map common full names to param keys
+const PARAM_ALIASES={
+  "natrium":"Na","sodium":"Na","kalium":"K","potassium":"K",
+  "klorida":"Cl","chloride":"Cl","chlorida":"Cl",
+  "glukosa":"Glukosa","glucose":"Glukosa","gula darah":"Glukosa",
+  "hemoglobin":"Hb","haemoglobin":"Hb",
+  "trombosit":"PLT","platelet":"PLT","platelets":"PLT",
+  "leukosit":"WBC","leukocyte":"WBC","wbc":"WBC",
+  "eritrosit":"RBC","erythrocyte":"RBC","rbc":"RBC",
+  "kreatinin":"Kreatinin","creatinine":"Kreatinin","creatinin":"Kreatinin",
+  "ureum":"Ureum","urea":"Ureum","bun":"Ureum",
+  "albumin":"Albumin","bilirubin total":"BilTotal","bilirubin":"BilTotal",
+  "protein total":"TotProt","total protein":"TotProt",
+  "sgot":"SGOT","ast":"SGOT","sgpt":"SGPT","alt":"SGPT",
+  "gamma gt":"GGT","ggt":"GGT",
+  "pt":"PT","aptt":"APTT","inr":"INR",
+  "fibrinogen":"Fibrinogen","d-dimer":"DDimer","d dimer":"DDimer","ddimer":"DDimer",
+  "ph":"pH","pco2":"pCO2","po2":"pO2","hco3":"HCO3","be":"BE","sao2":"SaO2","laktat":"Laktat","lactate":"Laktat",
+  "ph urin":"pHUrin","bj urin":"BJUrin","berat jenis":"BJUrin",
+  "protein urin":"ProtUrin","glukosa urin":"GluUrin",
+  "crp":"CRP","c-reactive protein":"CRP","prokalsitonin":"PCT","procalcitonin":"PCT",
+  "ferritin":"Ferritin","il-6":"IL6","il6":"IL6","interleukin-6":"IL6",
+  "mcv":"MCV","mch":"MCH","mchc":"MCHC",
+};
+
+function resolveParamKey(headerName, currentParam){
+  const lower=headerName.toLowerCase().trim();
+  // 1. Exact match with current param (case-insensitive)
+  if(lower===currentParam.toLowerCase())return headerName;
+  // 2. Check aliases
+  if(PARAM_ALIASES[lower])return headerName; // will be resolved in handlePaste
+  // 3. Partial match with current param name
+  if(lower.includes(currentParam.toLowerCase()))return headerName;
+  return null;
+}
+
 function parseCSV(txt){
   const lines=txt.trim().split(/\r?\n/).filter(Boolean);
   if(lines.length<2)return null;
-  const hdr=lines[0].split(/[,;\t]/).map(h=>h.trim());
-  const rows=lines.slice(1).map(l=>{const c=l.split(/[,;\t]/),o={};hdr.forEach((h,i)=>o[h]=c[i]?.trim());return o;});
+  // Detect delimiter: if first data line has semicolons or tabs, use those
+  // Also handle single-column data (no delimiter needed)
+  const firstData=lines[1];
+  let delim=";";
+  if(firstData.includes("\t"))delim="\t";
+  else if(firstData.includes(";"))delim=";";
+  else if(firstData.includes(",")&&!/^-?\d+,\d+$/.test(firstData.trim()))delim=",";
+  else delim="SINGLE"; // single column
+
+  let hdr,rows;
+  if(delim==="SINGLE"){
+    // Single column: header on first line, values on subsequent lines
+    hdr=[lines[0].trim()];
+    rows=lines.slice(1).map(l=>({[hdr[0]]:l.trim()}));
+  } else {
+    hdr=lines[0].split(delim).map(h=>h.trim());
+    rows=lines.slice(1).map(l=>{
+      const parts=l.split(delim);
+      const o={};
+      hdr.forEach((h,i)=>o[h]=parts[i]?.trim());
+      return o;
+    });
+  }
   return{hdr,rows};
 }
 
@@ -1100,7 +1171,7 @@ function MiddlewareTab(){
   -d '{"param":"${param}","ward":"${ward}","value":${value},"recorded_at":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}'`;
 
   const jsonExample=(ward="IGD",param="Hb",value="12.5")=>JSON.stringify({
-    param,ward,value:parseFloat(value),
+    param,ward,value:parseNum(value),
     recorded_at:new Date().toISOString()
   },null,2);
 
@@ -1431,10 +1502,36 @@ export default function PasienQuC(){
 
   const handleFile=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>setPasteText(ev.target.result);r.readAsText(f);};
   const handlePaste=w=>{
-    const p=parseCSV(pasteText);if(!p)return alert("Format tidak dikenali.");
-    const col=p.hdr.find(h=>h.toLowerCase().includes(param.toLowerCase()))||p.hdr.find(h=>p.rows.every(r=>!isNaN(parseFloat(r[h]))));
-    if(!col)return alert("Kolom numerik tidak ditemukan.");
-    setWardRaw(w,p.rows.map(r=>parseFloat(r[col])).filter(v=>!isNaN(v)));
+    const p=parseCSV(pasteText);
+    if(!p)return alert("Format tidak dikenali. Pastikan ada header di baris pertama.");
+    
+    // Find matching column — check aliases + param name + numeric fallback
+    const col=
+      // 1. Exact param key match
+      p.hdr.find(h=>h.trim()===param)||
+      // 2. Case-insensitive param match
+      p.hdr.find(h=>h.toLowerCase().trim()===param.toLowerCase())||
+      // 3. Alias match (Natrium→Na, Kreatinin→Kreatinin, dll)
+      p.hdr.find(h=>PARAM_ALIASES[h.toLowerCase().trim()]===param)||
+      // 4. Partial match (header contains param name)
+      p.hdr.find(h=>h.toLowerCase().includes(param.toLowerCase()))||
+      // 5. Param name contains header
+      p.hdr.find(h=>param.toLowerCase().includes(h.toLowerCase())&&h.length>1)||
+      // 6. First numeric column (fallback)
+      p.hdr.find(h=>p.rows.slice(0,5).some(r=>!isNaN(parseNum(r[h]))));
+
+    if(!col){
+      const hdrList=p.hdr.join(", ");
+      return alert(`Kolom untuk parameter "${param}" tidak ditemukan.\n\nHeader yang terdeteksi: ${hdrList}\n\nGunakan nama kolom seperti: ${param}, atau nama lengkap (Natrium, Kreatinin, dll).`);
+    }
+
+    const vals=p.rows.map(r=>parseNum(r[col])).filter(v=>!isNaN(v)&&isFinite(v));
+    if(vals.length===0) return alert("Tidak ada nilai numerik valid yang ditemukan di kolom tersebut.\nPastikan format angka benar (gunakan koma atau titik sebagai desimal).");
+    
+    setWardRaw(w,vals);
+    // Show success feedback
+    const rejCount=p.rows.length-vals.length;
+   if(rejCount>0) alert("✅ "+vals.length+" data berhasil diproses. "+rejCount+" baris dilewati (bukan angka).");
   };
 
   const combinedRaw=useMemo(()=>{const all=selWards.flatMap(w=>getWardRaw(w)||[]);return all.length?all:null;},[wardData,selWards,group,param]);
