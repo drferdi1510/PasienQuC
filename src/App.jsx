@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  ReferenceLine, ResponsiveContainer, BarChart, Bar, ComposedChart, Scatter
+  ReferenceLine, ReferenceArea, ResponsiveContainer, BarChart, Bar, ComposedChart
 } from "recharts";
 
 /* ─── Fonts ─── */
@@ -265,15 +265,46 @@ function LJChart({values, mean, sdVal, paramLabel, wardLabel, unit, violations})
   const violSet=new Set(violations.map(v=>v.idx));
   const rejectSet=new Set(violations.filter(v=>v.rules.some(r=>r.type==="reject")).map(v=>v.idx));
 
-  const data=values.map((v,i)=>{
+  // ── Zoom state ──
+  const[zoomLeft,setZoomLeft]=useState(null);
+  const[zoomRight,setZoomRight]=useState(null);
+  const[selecting,setSelecting]=useState(false);
+  const[xDomain,setXDomain]=useState([1,values.length]);
+  const[isZoomed,setIsZoomed]=useState(false);
+
+  // ── Auto Y domain: padding 0.5 SD beyond ±3SD, never goes below 0 for positive-only params ──
+  const yPad=sdVal*0.6;
+  const yMin=+(mean-3*sdVal-yPad).toFixed(3);
+  const yMax=+(mean+3*sdVal+yPad).toFixed(3);
+  const yDomain=[yMin,yMax];
+
+  const fullData=values.map((v,i)=>{
     const z=(v-mean)/sdVal;
-    return{idx:i+1,value:+v.toFixed(3),z:+z.toFixed(2),
-      p3sd:+(mean+3*sdVal).toFixed(3),p2sd:+(mean+2*sdVal).toFixed(3),p1sd:+(mean+1*sdVal).toFixed(3),
-      m3sd:+(mean-3*sdVal).toFixed(3),m2sd:+(mean-2*sdVal).toFixed(3),m1sd:+(mean-1*sdVal).toFixed(3),
-      mn:+mean.toFixed(3),
-      fill:rejectSet.has(i)?T.danger:violSet.has(i)?T.warn:T.ok,
-    };
+    return{idx:i+1,value:+v.toFixed(3),z:+z.toFixed(2)};
   });
+
+  // Filtered data for zoom window
+  const data=fullData.filter(d=>d.idx>=xDomain[0]&&d.idx<=xDomain[1]);
+
+  const handleMouseDown=(e)=>{
+    if(!e?.activeLabel)return;
+    setZoomLeft(e.activeLabel);setSelecting(true);
+  };
+  const handleMouseMove=(e)=>{
+    if(!selecting||!e?.activeLabel)return;
+    setZoomRight(e.activeLabel);
+  };
+  const handleMouseUp=()=>{
+    if(!selecting){return;}
+    setSelecting(false);
+    if(zoomLeft!==null&&zoomRight!==null&&zoomLeft!==zoomRight){
+      const l=Math.min(zoomLeft,zoomRight);
+      const r=Math.max(zoomLeft,zoomRight);
+      if(r-l>=2){setXDomain([l,r]);setIsZoomed(true);}
+    }
+    setZoomLeft(null);setZoomRight(null);
+  };
+  const resetZoom=()=>{setXDomain([1,values.length]);setIsZoomed(false);setZoomLeft(null);setZoomRight(null);setSelecting(false);};
 
   const CustomDot=(props)=>{
     const{cx,cy,payload}=props;
@@ -300,36 +331,56 @@ function LJChart({values, mean, sdVal, paramLabel, wardLabel, unit, violations})
   };
 
   return(<div style={{...CS,padding:20}}>
-    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,flexWrap:"wrap",gap:8}}>
       <div>
         <div style={{fontSize:13,fontWeight:600,color:T.text}}>Levey-Jennings Chart — {paramLabel}</div>
         <div style={{fontSize:10,color:T.textT,fontFamily:T.mono}}>{wardLabel} · n={values.length} · Mean={mean.toFixed(3)} · SD={sdVal.toFixed(3)}</div>
       </div>
-      <div style={{display:"flex",gap:8,alignItems:"center",fontSize:10,fontFamily:T.mono}}>
-        <span style={{color:T.ok}}>● Normal</span>
-        <span style={{color:T.warn}}>● Warning</span>
-        <span style={{color:T.danger}}>● Reject</span>
+      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+        <span style={{fontSize:10,fontFamily:T.mono,color:T.ok}}>● Normal</span>
+        <span style={{fontSize:10,fontFamily:T.mono,color:T.warn}}>● Warning</span>
+        <span style={{fontSize:10,fontFamily:T.mono,color:T.danger}}>● Reject</span>
+        {isZoomed&&(
+          <button className="sb" onClick={resetZoom} style={{padding:"4px 10px",background:T.blueL,border:`1px solid ${T.blue}44`,borderRadius:7,color:T.blueD,fontSize:10,fontFamily:T.mono,cursor:"pointer",fontWeight:600}}>
+            ↩ Reset Zoom
+          </button>
+        )}
+        <span style={{fontSize:9,color:T.textT,fontFamily:T.mono}}>{isZoomed?`Titik ${xDomain[0]}–${xDomain[1]}`:"Drag untuk zoom"}</span>
       </div>
     </div>
-    <ResponsiveContainer width="100%" height={300}>
-      <ComposedChart data={data} margin={{top:8,right:14,bottom:14,left:0}}>
+    <ResponsiveContainer width="100%" height={320}>
+      <ComposedChart data={data} margin={{top:8,right:50,bottom:14,left:8}}
+        onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}
+        style={{cursor:selecting?"crosshair":"default"}}>
         <CartesianGrid strokeDasharray="3 3" stroke="rgba(14,165,233,.07)"/>
-        <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border} label={{value:"Urutan",position:"insideBottom",offset:-4,fill:T.textT,fontSize:9}}/>
-        <YAxis tick={{fontSize:9,fill:T.textT}} stroke={T.border} label={{value:unit,angle:-90,position:"insideLeft",fill:T.textT,fontSize:9}}/>
+        <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border}
+          label={{value:"Urutan Pasien",position:"insideBottom",offset:-4,fill:T.textT,fontSize:9}}
+          domain={[xDomain[0],xDomain[1]]} type="number" allowDataOverflow/>
+        <YAxis tick={{fontSize:9,fill:T.textT}} stroke={T.border}
+          label={{value:unit,angle:-90,position:"insideLeft",fill:T.textT,fontSize:9,dx:-4}}
+          domain={yDomain} tickCount={8} allowDataOverflow/>
         <Tooltip content={<TT/>}/>
 
-        {/* SD zone fills via reference lines */}
-        <ReferenceLine y={mean+3*sdVal} stroke={T.danger} strokeWidth={1.5} strokeDasharray="4 3" label={{value:"+3SD",fill:T.danger,fontSize:8,position:"insideTopRight"}}/>
-        <ReferenceLine y={mean+2*sdVal} stroke={T.warn} strokeWidth={1.2} strokeDasharray="4 3" label={{value:"+2SD",fill:T.warn,fontSize:8,position:"insideTopRight"}}/>
-        <ReferenceLine y={mean+sdVal} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3 3" label={{value:"+1SD",fill:T.textT,fontSize:8,position:"insideTopRight"}}/>
-        <ReferenceLine y={mean} stroke={T.blue} strokeWidth={1.5} label={{value:"Mean",fill:T.blue,fontSize:8,position:"insideTopRight"}}/>
-        <ReferenceLine y={mean-sdVal} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3 3" label={{value:"-1SD",fill:T.textT,fontSize:8,position:"insideBottomRight"}}/>
-        <ReferenceLine y={mean-2*sdVal} stroke={T.warn} strokeWidth={1.2} strokeDasharray="4 3" label={{value:"-2SD",fill:T.warn,fontSize:8,position:"insideBottomRight"}}/>
-        <ReferenceLine y={mean-3*sdVal} stroke={T.danger} strokeWidth={1.5} strokeDasharray="4 3" label={{value:"-3SD",fill:T.danger,fontSize:8,position:"insideBottomRight"}}/>
+        {/* SD reference lines with right-side labels */}
+        <ReferenceLine y={mean+3*sdVal} stroke={T.danger} strokeWidth={1.5} strokeDasharray="4 3" label={{value:"+3SD",fill:T.danger,fontSize:8,position:"right"}}/>
+        <ReferenceLine y={mean+2*sdVal} stroke={T.warn} strokeWidth={1.2} strokeDasharray="4 3" label={{value:"+2SD",fill:T.warn,fontSize:8,position:"right"}}/>
+        <ReferenceLine y={mean+sdVal} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3 3" label={{value:"+1SD",fill:T.textT,fontSize:8,position:"right"}}/>
+        <ReferenceLine y={mean} stroke={T.blue} strokeWidth={1.8} label={{value:"Mean",fill:T.blue,fontSize:8,position:"right"}}/>
+        <ReferenceLine y={mean-sdVal} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3 3" label={{value:"-1SD",fill:T.textT,fontSize:8,position:"right"}}/>
+        <ReferenceLine y={mean-2*sdVal} stroke={T.warn} strokeWidth={1.2} strokeDasharray="4 3" label={{value:"-2SD",fill:T.warn,fontSize:8,position:"right"}}/>
+        <ReferenceLine y={mean-3*sdVal} stroke={T.danger} strokeWidth={1.5} strokeDasharray="4 3" label={{value:"-3SD",fill:T.danger,fontSize:8,position:"right"}}/>
+
+        {/* Zoom selection highlight */}
+        {selecting&&zoomLeft!==null&&zoomRight!==null&&(
+          <ReferenceArea x1={zoomLeft} x2={zoomRight} strokeOpacity={0.3} fill={T.blue} fillOpacity={0.15}/>
+        )}
 
         <Line dataKey="value" stroke={T.blue} strokeWidth={1.5} dot={<CustomDot/>} activeDot={false} name={paramLabel} connectNulls isAnimationActive={false}/>
       </ComposedChart>
     </ResponsiveContainer>
+    <div style={{fontSize:9,color:T.textT,fontFamily:T.mono,textAlign:"center",marginTop:4}}>
+      💡 Klik dan drag pada grafik untuk zoom in · Tombol "Reset Zoom" untuk kembali ke tampilan penuh
+    </div>
   </div>);
 }
 
@@ -658,6 +709,68 @@ function StatCard({label,value,unit,color,delay=0,warn=false}){
   </div>);
 }
 
+
+/* ══ PBRTQC CHART (with zoom) ══ */
+function PBRTQCChart({chartData,selMethods,limits,cfg,paramLabel,TT,yDomain}){
+  const[zoomLeft,setZoomLeft]=useState(null);
+  const[zoomRight,setZoomRight]=useState(null);
+  const[selecting,setSelecting]=useState(false);
+  const[xDomain,setXDomain]=useState(null);
+  const[isZoomed,setIsZoomed]=useState(false);
+
+  const displayData=xDomain?chartData.filter(d=>d.idx>=xDomain[0]&&d.idx<=xDomain[1]):chartData;
+
+  const handleMouseDown=(e)=>{if(!e?.activeLabel)return;setZoomLeft(e.activeLabel);setSelecting(true);};
+  const handleMouseMove=(e)=>{if(!selecting||!e?.activeLabel)return;setZoomRight(e.activeLabel);};
+  const handleMouseUp=()=>{
+    setSelecting(false);
+    if(zoomLeft!==null&&zoomRight!==null&&zoomLeft!==zoomRight){
+      const l=Math.min(zoomLeft,zoomRight),r=Math.max(zoomLeft,zoomRight);
+      if(r-l>=2){setXDomain([l,r]);setIsZoomed(true);}
+    }
+    setZoomLeft(null);setZoomRight(null);
+  };
+  const resetZoom=()=>{setXDomain(null);setIsZoomed(false);};
+
+  return(
+    <div style={{...CS,padding:18,marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,flexWrap:"wrap",gap:6}}>
+        <div style={{fontSize:13,fontWeight:600,color:T.text}}>PBRTQC Control Chart — {paramLabel}</div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          {isZoomed&&<button className="sb" onClick={resetZoom} style={{padding:"4px 10px",background:T.blueL,border:`1px solid ${T.blue}44`,borderRadius:7,color:T.blueD,fontSize:10,fontFamily:T.mono,cursor:"pointer",fontWeight:600}}>↩ Reset Zoom</button>}
+          <span style={{fontSize:9,color:T.textT,fontFamily:T.mono}}>{isZoomed?`Titik ${xDomain[0]}–${xDomain[1]}`:"Drag untuk zoom"}</span>
+        </div>
+      </div>
+      <ResponsiveContainer width="100%" height={280}>
+        <LineChart data={displayData} margin={{top:4,right:48,bottom:12,left:8}}
+          onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}
+          style={{cursor:selecting?"crosshair":"default"}}>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(14,165,233,.07)"/>
+          <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border} type="number" allowDataOverflow domain={xDomain||["auto","auto"]}/>
+          <YAxis tick={{fontSize:9,fill:T.textT}} stroke={T.border}
+            label={{value:cfg.unit,angle:-90,position:"insideLeft",fill:T.textT,fontSize:9,dx:-4}}
+            domain={yDomain} allowDataOverflow tickCount={8}/>
+          <Tooltip content={<TT/>}/><Legend wrapperStyle={{fontSize:10,paddingTop:5}}/>
+          <Line dataKey="raw" stroke="rgba(14,165,233,.14)" dot={false} strokeWidth={1} name="Raw" legendType="none"/>
+          <ReferenceLine y={cfg.refHigh} stroke={T.textT} strokeDasharray="4 4" strokeOpacity={.4} label={{value:"Ref↑",fill:T.textT,fontSize:8,position:"right"}}/>
+          <ReferenceLine y={cfg.refLow} stroke={T.textT} strokeDasharray="4 4" strokeOpacity={.4} label={{value:"Ref↓",fill:T.textT,fontSize:8,position:"right"}}/>
+          {selMethods.map(m=>[
+            <Line key={m} dataKey={m} stroke={METHODS[m].color} dot={false} strokeWidth={2} name={METHODS[m].label} connectNulls strokeDasharray={METHODS[m].dash}/>,
+            <ReferenceLine key={m+"u"} y={limits[m].ucl} stroke={METHODS[m].color} strokeDasharray="2 5" strokeOpacity={.35} label={{value:`UCL`,fill:METHODS[m].color,fontSize:7,position:"right"}}/>,
+            <ReferenceLine key={m+"l"} y={limits[m].lcl} stroke={METHODS[m].color} strokeDasharray="2 5" strokeOpacity={.35} label={{value:`LCL`,fill:METHODS[m].color,fontSize:7,position:"right"}}/>,
+          ])}
+          {selecting&&zoomLeft!==null&&zoomRight!==null&&(
+            <ReferenceArea x1={zoomLeft} x2={zoomRight} fill={T.blue} fillOpacity={0.12} strokeOpacity={0.3}/>
+          )}
+        </LineChart>
+      </ResponsiveContainer>
+      <div style={{fontSize:9,color:T.textT,fontFamily:T.mono,textAlign:"center",marginTop:4}}>
+        💡 Klik dan drag untuk zoom in · Tombol "Reset Zoom" untuk kembali ke tampilan penuh
+      </div>
+    </div>
+  );
+}
+
 /* ══ MAIN QC PANEL ══ */
 function QCPanel({data,cfg,blockSize,mult,useAoN,selMethods,apiKey,wardKey,wardLabel,paramLabel,param,onSave}){
   const working=useMemo(()=>!data?null:useAoN?data.filter(v=>v>=cfg.refLow&&v<=cfg.refHigh):data,[data,useAoN,cfg]);
@@ -723,25 +836,20 @@ function QCPanel({data,cfg,blockSize,mult,useAoN,selMethods,apiKey,wardKey,wardL
     {stats&&<div style={{marginBottom:16}}><LJChart values={working} mean={stats.mean} sdVal={stats.sd} paramLabel={paramLabel} wardLabel={wardLabel} unit={cfg.unit} violations={wgViolations}/></div>}
 
     {/* PBRTQC Chart */}
-    {chartData.length>0&&series&&limits&&<div style={{...CS,padding:18,marginBottom:14}}>
-      <div style={{fontSize:13,fontWeight:600,color:T.text,marginBottom:12}}>PBRTQC Control Chart — {paramLabel}</div>
-      <ResponsiveContainer width="100%" height={260}>
-        <LineChart data={chartData} margin={{top:4,right:12,bottom:12,left:0}}>
-          <CartesianGrid strokeDasharray="3 3" stroke="rgba(14,165,233,.07)"/>
-          <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border}/>
-          <YAxis tick={{fontSize:9,fill:T.textT}} stroke={T.border} label={{value:cfg.unit,angle:-90,position:"insideLeft",fill:T.textT,fontSize:9}}/>
-          <Tooltip content={<TT/>}/><Legend wrapperStyle={{fontSize:10,paddingTop:5}}/>
-          <Line dataKey="raw" stroke="rgba(14,165,233,.14)" dot={false} strokeWidth={1} name="Raw" legendType="none"/>
-          <ReferenceLine y={cfg.refHigh} stroke={T.textT} strokeDasharray="4 4" strokeOpacity={.4}/>
-          <ReferenceLine y={cfg.refLow} stroke={T.textT} strokeDasharray="4 4" strokeOpacity={.4}/>
-          {selMethods.map(m=>[
-            <Line key={m} dataKey={m} stroke={METHODS[m].color} dot={false} strokeWidth={2} name={METHODS[m].label} connectNulls strokeDasharray={METHODS[m].dash}/>,
-            <ReferenceLine key={m+"u"} y={limits[m].ucl} stroke={METHODS[m].color} strokeDasharray="2 5" strokeOpacity={.3}/>,
-            <ReferenceLine key={m+"l"} y={limits[m].lcl} stroke={METHODS[m].color} strokeDasharray="2 5" strokeOpacity={.3}/>,
-          ])}
-        </LineChart>
-      </ResponsiveContainer>
-    </div>}
+    {chartData.length>0&&series&&limits&&(()=>{
+      // Auto Y domain: use min UCL/LCL across methods + raw data range, with padding
+      const allVals=chartData.flatMap(d=>[d.raw,...selMethods.map(m=>d[m]).filter(Boolean)]);
+      const allLimits=selMethods.flatMap(m=>[limits[m].ucl,limits[m].lcl]);
+      const allY=[...allVals,...allLimits].filter(v=>v!=null&&!isNaN(v));
+      const yMin=Math.min(...allY);const yMax=Math.max(...allY);
+      const yPad=(yMax-yMin)*0.12||1;
+      const pbrtqcYDomain=[+(yMin-yPad).toFixed(3),+(yMax+yPad).toFixed(3)];
+
+      // Zoom state for PBRTQC chart
+      return(
+        <PBRTQCChart chartData={chartData} selMethods={selMethods} limits={limits} cfg={cfg} paramLabel={paramLabel} TT={TT} yDomain={pbrtqcYDomain}/>
+      );
+    })()}
 
     {/* Westgard */}
     <div style={{marginBottom:14}}><WestgardPanel violations={wgViolations}/></div>
