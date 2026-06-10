@@ -94,7 +94,7 @@ const PARAM_GROUPS={
   IMUNOSEROLOGI:{label:"Imunoserologi",icon:"🛡️",color:"#06b6d4",params:{CRP:{label:"C-Reactive Protein",unit:"mg/L",refLow:0,refHigh:5,trim:.25,tea:9.0},PCT:{label:"Prokalsitonin",unit:"ng/mL",refLow:0,refHigh:0.5,trim:.25,tea:9.0},Ferritin:{label:"Ferritin",unit:"ng/mL",refLow:12,refHigh:300,trim:.25,tea:9.0},IL6:{label:"Interleukin-6",unit:"pg/mL",refLow:0,refHigh:7,trim:.25,tea:9.0}}},
 };
 
-const METHODS={MA:{label:"Moving Average",short:"MA",color:"#0ea5e9",dash:"none"},EWMA:{label:"EWMA",short:"EWMA",color:"#10b981",dash:"5 3"},TRIM:{label:"Trimmed Mean",short:"Trim",color:"#f59e0b",dash:"3 3"},MEDIAN:{label:"Median/AoN",short:"Med",color:"#8b5cf6",dash:"8 3"}};
+const METHODS={MA:{label:"Moving Average",short:"MA",color:"#0ea5e9",dash:"none"},EWMA:{label:"EWMA",short:"EWMA",color:"#10b981",dash:"5 3"},TRIM:{label:"Trimmed Mean",short:"Trim",color:"#f59e0b",dash:"3 3"},MEDIAN:{label:"Median/AoN",short:"Med",color:"#8b5cf6",dash:"8 3"},MOVMED:{label:"Moving Median",short:"MovMed",color:"#ec4899",dash:"6 2"}};
 
 /* ══ GROQ ══ */
 const GROQ_EP=window.location.hostname==="localhost"||window.location.hostname==="127.0.0.1"
@@ -117,7 +117,55 @@ const calcMA=(v,n)=>v.map((_,i)=>i<n-1?null:+avg(v.slice(i-n+1,i+1)).toFixed(3))
 const calcEWMA=(v,l=.2)=>{let e=v[0];return v.map(x=>+(e=l*x+(1-l)*e).toFixed(3));};
 const calcTrim=(v,n,f)=>v.map((_,i)=>{if(i<n-1)return null;const s=[...v.slice(i-n+1,i+1)].sort((a,b)=>a-b),k=Math.floor(s.length*f),t=s.slice(k,s.length-k);return +avg(t).toFixed(3);});
 const calcMed=(v,n)=>v.map((_,i)=>i<n-1?null:+med(v.slice(i-n+1,i+1)).toFixed(3));
+const calcMovMed=(v,n)=>v.map((_,i)=>i<n-1?null:+med(v.slice(i-n+1,i+1)).toFixed(3));
 const getLimits=(v,mult)=>{const vals=v.filter(x=>x!==null),m=avg(vals),s=std(vals);return{target:m,ucl:m+mult*s,lcl:m-mult*s,sd:s};};
+
+/* ══ DATA TRANSFORMATION ENGINE ══ */
+function skewness(vals){
+  const n=vals.length,m=avg(vals),s=std(vals);
+  if(s===0)return 0;
+  return vals.reduce((a,v)=>a+Math.pow((v-m)/s,3),0)/n;
+}
+function applyTransform(vals, method){
+  switch(method){
+    case"log10": return vals.map(v=>v>0?+Math.log10(v).toFixed(4):null);
+    case"ln":    return vals.map(v=>v>0?+Math.log(v).toFixed(4):null);
+    case"sqrt":  return vals.map(v=>v>=0?+Math.sqrt(v).toFixed(4):null);
+    case"inverse": return vals.map(v=>v!==0?+(1/v).toFixed(4):null);
+    case"winsor":{
+      const s=[...vals].sort((a,b)=>a-b);
+      const q1=s[Math.floor(s.length*.25)],q3=s[Math.floor(s.length*.75)];
+      const iqr=q3-q1,lo=q1-1.5*iqr,hi=q3+1.5*iqr;
+      return vals.map(v=>+Math.min(Math.max(v,lo),hi).toFixed(4));
+    }
+    case"boxcox":{
+      // Find optimal lambda via simple grid search (max log-likelihood)
+      if(vals.some(v=>v<=0))return vals; // BoxCox requires positive values
+      const lambdas=[-2,-1.5,-1,-.5,0,.5,1,1.5,2];
+      let bestL=1,bestLL=-Infinity;
+      lambdas.forEach(l=>{
+        const tx=l===0?vals.map(v=>Math.log(v)):vals.map(v=>(Math.pow(v,l)-1)/l);
+        const m=avg(tx),s=std(tx);
+        if(s===0)return;
+        const ll=-tx.length*Math.log(s)+(l-1)*vals.reduce((a,v)=>a+Math.log(v),0);
+        if(ll>bestLL){bestLL=ll;bestL=l;}
+      });
+      return bestL===0?vals.map(v=>+Math.log(v).toFixed(4)):vals.map(v=>+((Math.pow(v,bestL)-1)/bestL).toFixed(4));
+    }
+    default: return vals;
+  }
+}
+function autoTransform(vals){
+  const sk=skewness(vals);
+  if(Math.abs(sk)<0.5)return"none";
+  if(sk>1.5)return"log10";
+  if(sk>0.5)return"sqrt";
+  if(sk<-1.5)return"inverse";
+  return"winsor";
+}
+function transformLabel(method){
+  return{none:"None",log10:"Log₁₀",ln:"Ln",sqrt:"√x",inverse:"1/x",winsor:"Winsorization",boxcox:"Box-Cox"}[method]||method;
+}
 
 /* ══ WESTGARD RULES ══ */
 /* ══ SIGMA TIER SYSTEM ══ */
@@ -823,7 +871,7 @@ function StatCard({label,value,unit,color,delay=0,warn=false}){
 
 
 /* ══ PBRTQC CHART (with zoom) ══ */
-function PBRTQCChart({chartData,selMethods,limits,cfg,paramLabel,TT,yDomain}){
+function PBRTQCChart({chartData,selMethods,limits,cfg,paramLabel,TT,yDomain,iqcPoints=[],activeTx}){
   const[zoomLeft,setZoomLeft]=useState(null);
   const[zoomRight,setZoomRight]=useState(null);
   const[selecting,setSelecting]=useState(false);
@@ -874,11 +922,25 @@ function PBRTQCChart({chartData,selMethods,limits,cfg,paramLabel,TT,yDomain}){
           {selecting&&zoomLeft!==null&&zoomRight!==null&&(
             <ReferenceArea x1={zoomLeft} x2={zoomRight} fill={T.blue} fillOpacity={0.12} strokeOpacity={0.3}/>
           )}
+          {/* IQC overlay points as reference lines with custom dots */}
+          {iqcPoints.filter(p=>p.idx>=((xDomain||[1])[0])&&p.idx<=(xDomain||[0,chartData.length])[1]).map((pt,i)=>(
+            <ReferenceLine key={"iqc"+i} x={pt.idx} stroke={pt.color} strokeWidth={1} strokeDasharray="2 4" strokeOpacity={0.7}
+              label={{value:"♦",fill:pt.color,fontSize:12,position:"top"}}/>
+          ))}
         </LineChart>
       </ResponsiveContainer>
       <div style={{fontSize:9,color:T.textT,fontFamily:T.mono,textAlign:"center",marginTop:4}}>
         💡 Klik dan drag untuk zoom in · Tombol "Reset Zoom" untuk kembali ke tampilan penuh
       </div>
+      {/* IQC overlay legend */}
+      {iqcPoints&&iqcPoints.length>0&&(
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:8,padding:"6px 10px",background:T.surfB,borderRadius:8,fontSize:10,fontFamily:T.mono,color:T.textS}}>
+          <span style={{fontWeight:600,color:T.text}}>IQC Overlay:</span>
+          {[0,1,2].map(i=>{const pts=iqcPoints.filter(p=>p.level===i);if(!pts.length)return null;return<span key={i} style={{color:["#0ea5e9","#10b981","#f59e0b"][i]}}>♦ L{i+1} ({pts.length})</span>;})}
+          <span style={{color:T.danger}}>♦ Reject</span><span style={{color:T.warn}}>♦ Warning</span>
+          {activeTx&&activeTx!=="none"&&<span style={{color:T.blue,fontWeight:600}}>· {transformLabel(activeTx)}</span>}
+        </div>
+      )}
     </div>
   );
 }
@@ -1104,14 +1166,395 @@ function SigmaPanel({ param, ward, cfg, stats, onSigmaChange, paramLabel }) {
   );
 }
 
+
+/* ══ IQC STORAGE ══ */
+const IQC_KEY = "pasienquc_iqc_data";
+function loadIQC(param, ward){ try{const d=JSON.parse(localStorage.getItem(IQC_KEY)||"{}"); return d[`${param}_${ward}`]||{levels:[]};} catch{return{levels:[]};} }
+function saveIQC(param, ward, data){ try{const d=JSON.parse(localStorage.getItem(IQC_KEY)||"{}"); d[`${param}_${ward}`]=data; localStorage.setItem(IQC_KEY,JSON.stringify(d));}catch{} }
+
+/* ══ TRANSFORMATION PANEL ══ */
+function TransformPanel({working, transform, setTransform, autoTx, setAutoTx, activeTx, rawSkew, txStats, paramLabel}){
+  const[expanded,setExpanded]=useState(false);
+  const txOptions=[
+    {key:"none",  label:"None",          icon:"—",  desc:"Tidak ada transformasi"},
+    {key:"log10", label:"Log₁₀",         icon:"㏒", desc:"Cocok untuk distribusi sangat right-skewed (CRP, PCT, Bilirubin, D-Dimer)"},
+    {key:"ln",    label:"Ln",            icon:"ℓ",  desc:"Natural log, alternatif Log₁₀"},
+    {key:"sqrt",  label:"√x",            icon:"√",  desc:"Square root, untuk count data (PLT, WBC)"},
+    {key:"inverse",label:"1/x",          icon:"⅟",  desc:"Inverse, untuk left-skewed"},
+    {key:"winsor", label:"Winsorization",icon:"✂",  desc:"Cap outlier ekstrem, data tidak dibuang"},
+    {key:"boxcox", label:"Box-Cox",      icon:"λ",  desc:"Auto-optimasi λ untuk normalitas terbaik"},
+  ];
+  const skewLabel=(s)=>s===null?"—":Math.abs(s)<0.5?"✅ Normal (|skew|<0.5)":Math.abs(s)<1?"⚠️ Mild skew":Math.abs(s)<2?"⚠️ Moderate skew":"❌ Severe skew (|skew|>2)";
+  const skewColor=(s)=>s===null?T.textT:Math.abs(s)<0.5?T.ok:Math.abs(s)<1?T.warn:T.danger;
+  const autoSuggestion=working?autoTransform(working):"none";
+
+  return(
+    <div style={{...CS,padding:0,overflow:"hidden",marginBottom:14}}>
+      <div onClick={()=>setExpanded(!expanded)} style={{padding:"12px 20px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",background:activeTx!=="none"?T.blueL:T.surfB}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:18}}>⚗️</span>
+          <div>
+            <div style={{fontSize:13,fontWeight:600,color:T.text}}>Transformasi Data</div>
+            <div style={{fontSize:10,color:T.textT,fontFamily:T.mono}}>
+              {activeTx==="none"?"Tidak aktif":"Aktif: "+transformLabel(activeTx)} · Skewness raw: {rawSkew??".."} · {skewLabel(rawSkew)}
+            </div>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+          {activeTx!=="none"&&<span style={{fontSize:11,fontWeight:700,color:T.blueD,fontFamily:T.mono,padding:"3px 10px",background:T.blue+"18",borderRadius:20}}>{transformLabel(activeTx)} aktif</span>}
+          <span style={{fontSize:14,color:T.textT}}>{expanded?"▲":"▼"}</span>
+        </div>
+      </div>
+
+      {expanded&&<div style={{padding:"18px 22px"}}>
+        {/* Auto-detect toggle */}
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16,padding:"12px 16px",background:T.surfB,borderRadius:10,border:`1.5px solid ${T.border}`}}>
+          <div className="tog" onClick={()=>setAutoTx(!autoTx)} style={{width:40,height:22,borderRadius:11,background:autoTx?T.blue:"#cbd5e1",position:"relative",flexShrink:0}}>
+            <div style={{position:"absolute",top:3,left:autoTx?20:3,width:16,height:16,borderRadius:"50%",background:"#fff",transition:"left .2s"}}/>
+          </div>
+          <div>
+            <div style={{fontSize:12,fontWeight:600,color:T.text}}>Auto-detect transformasi optimal</div>
+            <div style={{fontSize:11,color:T.textS}}>
+              Berdasarkan skewness data → saran: <strong style={{color:T.blue}}>{transformLabel(autoSuggestion)}</strong>
+              {autoTx&&<span style={{color:T.ok,fontWeight:600}}> (aktif)</span>}
+            </div>
+          </div>
+        </div>
+
+        {/* Skewness info */}
+        {working&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+          <div style={{background:T.surfB,borderRadius:9,padding:"10px 14px",border:`1px solid ${T.border}`}}>
+            <div style={{fontSize:10,color:T.textT,fontFamily:T.mono,marginBottom:4,letterSpacing:1}}>SKEWNESS RAW</div>
+            <div style={{fontSize:18,fontWeight:700,color:skewColor(rawSkew),fontFamily:T.mono}}>{rawSkew??".."}</div>
+            <div style={{fontSize:10,color:skewColor(rawSkew)}}>{skewLabel(rawSkew)}</div>
+          </div>
+          {activeTx!=="none"&&txStats&&<div style={{background:"#ecfdf5",borderRadius:9,padding:"10px 14px",border:`1px solid ${T.ok}44`}}>
+            <div style={{fontSize:10,color:T.textT,fontFamily:T.mono,marginBottom:4,letterSpacing:1}}>SETELAH TRANSFORMASI</div>
+            <div style={{fontSize:14,fontWeight:700,color:T.ok,fontFamily:T.mono}}>CV: {txStats.cv.toFixed(2)}%</div>
+            <div style={{fontSize:10,color:T.textS}}>Mean: {txStats.mean.toFixed(3)} · SD: {txStats.sd.toFixed(3)}</div>
+          </div>}
+        </div>}
+
+        {/* Method selector */}
+        <div style={{fontSize:11,fontWeight:600,color:T.text,marginBottom:10}}>Pilih Metode Transformasi</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:8}}>
+          {txOptions.map(t=>{
+            const active=activeTx===t.key&&!autoTx;
+            return(
+              <div key={t.key} className="ch" onClick={()=>{setAutoTx(false);setTransform(t.key);}} style={{
+                padding:"10px 12px",borderRadius:10,cursor:"pointer",
+                background:active?"#eff6ff":T.surfB,
+                border:`1.5px solid ${active?T.blue:T.border}`,
+                transition:"all .15s",
+              }}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                  <span style={{fontSize:16,fontFamily:T.mono,color:active?T.blue:T.textT}}>{t.icon}</span>
+                  <span style={{fontSize:13,fontWeight:active?700:500,color:active?T.blueD:T.text,fontFamily:T.mono}}>{t.label}</span>
+                  {autoSuggestion===t.key&&<span style={{fontSize:9,padding:"1px 6px",background:T.ok+"18",color:T.ok,borderRadius:10,fontWeight:600}}>Saran</span>}
+                </div>
+                <div style={{fontSize:10,color:T.textS,lineHeight:1.4}}>{t.desc}</div>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{marginTop:12,fontSize:10,color:T.textT,fontFamily:T.mono}}>
+          ⚠️ Transformasi mengubah skala data. Nilai pada grafik akan dalam satuan transformed. LJ Chart & PBRTQC Chart menggunakan data yang sudah ditransformasi.
+        </div>
+      </div>}
+    </div>
+  );
+}
+
+/* ══ IQC PANEL ══ */
+const IQC_LEVEL_COLORS=["#0ea5e9","#10b981","#f59e0b"];
+const IQC_LEVEL_NAMES=["Level 1 (Low)","Level 2 (Normal)","Level 3 (High)"];
+
+function IQCPanel({param, ward, wardLabel, paramLabel, cfg, sigmaTierCurrent, apiKey}){
+  const[iqcData,setIqcData]=useState(()=>loadIQC(param,ward));
+  const[activeLevel,setActiveLevel]=useState(0);
+  const[inputVal,setInputVal]=useState("");
+  const[showSetup,setShowSetup]=useState(false);
+  const[setupForm,setSetupForm]=useState({target:"",sd:"",name:""});
+  const[showOverlay,setShowOverlay]=useState(true);
+
+  useEffect(()=>{ saveIQC(param,ward,iqcData); },[iqcData,param,ward]);
+  useEffect(()=>{ setIqcData(loadIQC(param,ward)); },[param,ward]);
+
+  const level=iqcData.levels?.[activeLevel];
+  const addResult=()=>{
+    const v=parseNum(inputVal);
+    if(isNaN(v))return alert("Nilai tidak valid.");
+    setIqcData(prev=>{
+      const lvls=[...(prev.levels||[{},{},{}])];
+      if(!lvls[activeLevel])lvls[activeLevel]={};
+      lvls[activeLevel]={...lvls[activeLevel],results:[...(lvls[activeLevel].results||[]),{v,t:new Date().toISOString()}]};
+      return{...prev,levels:lvls};
+    });
+    setInputVal("");
+  };
+
+  const setupLevel=()=>{
+    const target=parseNum(setupForm.target),sdVal=parseNum(setupForm.sd);
+    if(isNaN(target)||isNaN(sdVal)||sdVal<=0)return alert("Target dan SD harus angka valid.");
+    setIqcData(prev=>{
+      const lvls=[...(prev.levels||[{},{},{}])];
+      if(!lvls[activeLevel])lvls[activeLevel]={};
+      lvls[activeLevel]={...lvls[activeLevel],target,sd:sdVal,name:setupForm.name||IQC_LEVEL_NAMES[activeLevel]};
+      return{...prev,levels:lvls};
+    });
+    setShowSetup(false);
+  };
+
+  const clearLevel=()=>{
+    if(!window.confirm("Hapus semua hasil kontrol level ini?"))return;
+    setIqcData(prev=>{
+      const lvls=[...(prev.levels||[])];
+      if(lvls[activeLevel])lvls[activeLevel]={...lvls[activeLevel],results:[]};
+      return{...prev,levels:lvls};
+    });
+  };
+
+  // Build IQC chart data per level
+  const buildIQCChart=(lv)=>{
+    if(!lv?.target||!lv?.sd||!lv?.results?.length)return[];
+    return lv.results.map((r,i)=>{
+      const z=(r.v-lv.target)/lv.sd;
+      return{idx:i+1,value:+r.v.toFixed(3),z:+z.toFixed(2),time:new Date(r.t).toLocaleDateString("id-ID")};
+    });
+  };
+
+  // Westgard check on IQC data
+  const iqcViolations=(lv)=>{
+    if(!lv?.target||!lv?.sd||!lv?.results?.length)return[];
+    return checkWestgard(lv.results.map(r=>r.v),lv.target,lv.sd,sigmaTierCurrent);
+  };
+
+  // IQC Chart tooltip
+  const IQCTT=({active,payload,label})=>{
+    if(!active||!payload?.length)return null;
+    const p=payload[0]?.payload;
+    return(<div style={{background:T.surface,border:`1.5px solid ${T.borderM}`,borderRadius:8,padding:"9px 12px",fontFamily:T.mono,fontSize:10}}>
+      <div style={{color:T.textS,marginBottom:3}}>Run #{label} · {p?.time}</div>
+      <div style={{color:T.text,fontWeight:600}}>{p?.value} {cfg.unit}</div>
+      <div style={{color:T.textT}}>z = {p?.z}</div>
+    </div>);
+  };
+
+  return(
+    <div style={{...CS,padding:0,overflow:"hidden",marginBottom:14}}>
+      {/* Header */}
+      <div style={{padding:"12px 20px",background:"linear-gradient(135deg,#f0fdf4,#ecfdf5)",borderBottom:`1.5px solid #6ee7b744`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:18}}>🧪</span>
+          <div>
+            <div style={{fontSize:13,fontWeight:700,color:T.text}}>QC Internal (IQC) — {paramLabel}</div>
+            <div style={{fontSize:10,color:T.textT,fontFamily:T.mono}}>{wardLabel} · Material kontrol per run</div>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:7,alignItems:"center"}}>
+          <div style={{fontSize:10,color:T.textT,fontFamily:T.mono}}>
+            Overlay di PBRTQC:
+          </div>
+          <div className="tog" onClick={()=>setShowOverlay(!showOverlay)} style={{width:36,height:20,borderRadius:10,background:showOverlay?T.ok:"#cbd5e1",position:"relative"}}>
+            <div style={{position:"absolute",top:2,left:showOverlay?17:2,width:16,height:16,borderRadius:"50%",background:"#fff",transition:"left .2s"}}/>
+          </div>
+        </div>
+      </div>
+
+      <div style={{padding:"18px 22px"}}>
+        {/* Level tabs */}
+        <div style={{display:"flex",gap:8,marginBottom:16}}>
+          {[0,1,2].map(i=>{
+            const lv=iqcData.levels?.[i];
+            const viol=iqcViolations(lv);
+            const rej=viol.filter(v=>v.rules.some(r=>r.type==="reject")).length;
+            return(
+              <button key={i} onClick={()=>setActiveLevel(i)} style={{
+                padding:"8px 16px",borderRadius:9,border:`1.5px solid ${activeLevel===i?IQC_LEVEL_COLORS[i]:T.border}`,
+                background:activeLevel===i?IQC_LEVEL_COLORS[i]+"14":"transparent",
+                color:activeLevel===i?IQC_LEVEL_COLORS[i]:T.textS,
+                fontSize:12,fontWeight:activeLevel===i?700:400,cursor:"pointer",
+                display:"flex",alignItems:"center",gap:7,
+              }}>
+                <span>{lv?.name||IQC_LEVEL_NAMES[i]}</span>
+                {lv?.results?.length>0&&<span style={{fontSize:10,fontFamily:T.mono,color:T.textT}}>n={lv.results.length}</span>}
+                {rej>0&&<span style={{fontSize:10,fontFamily:T.mono,color:T.danger,fontWeight:700}}>⚠{rej}</span>}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Level setup / content */}
+        {!level?.target?(
+          <div style={{textAlign:"center",padding:"24px 20px",background:T.surfB,borderRadius:10,border:`1.5px dashed ${T.border}`}}>
+            <div style={{fontSize:13,color:T.textS,marginBottom:12}}>Atur nilai target dan SD untuk {IQC_LEVEL_NAMES[activeLevel]}</div>
+            <button className="pb" onClick={()=>{setSetupForm({target:"",sd:"",name:""});setShowSetup(true);}} style={{...BP,padding:"8px 20px",fontSize:12}}>
+              + Setup Level {activeLevel+1}
+            </button>
+          </div>
+        ):(
+          <div>
+            {/* Level info bar */}
+            <div style={{display:"flex",gap:12,alignItems:"center",marginBottom:14,padding:"10px 14px",background:IQC_LEVEL_COLORS[activeLevel]+"0d",borderRadius:9,border:`1px solid ${IQC_LEVEL_COLORS[activeLevel]}33`}}>
+              <div style={{flex:1,display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+                {[
+                  ["Target",level.target.toFixed?level.target.toFixed(3):level.target,cfg.unit],
+                  ["SD",level.sd.toFixed?level.sd.toFixed(3):level.sd,""],
+                  ["CV%",level.sd&&level.target?(level.sd/level.target*100).toFixed(2)+"%":"—",""],
+                  ["N runs",level.results?.length||0,"hasil"],
+                ].map(([l,v,u])=>(
+                  <div key={l} style={{textAlign:"center"}}>
+                    <div style={{fontSize:9,color:T.textT,fontFamily:T.mono,letterSpacing:1}}>{l}</div>
+                    <div style={{fontSize:14,fontWeight:700,color:T.text,fontFamily:T.mono}}>{v}</div>
+                    <div style={{fontSize:9,color:T.textT,fontFamily:T.mono}}>{u}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{display:"flex",gap:6}}>
+                <button className="sb" onClick={()=>{setSetupForm({target:level.target,sd:level.sd,name:level.name||""});setShowSetup(true);}} style={{...BS,padding:"5px 11px",fontSize:11}}>✏️</button>
+                <button className="sb" onClick={clearLevel} style={{...BS,padding:"5px 11px",fontSize:11,color:T.danger,borderColor:`${T.danger}44`}}>🗑</button>
+              </div>
+            </div>
+
+            {/* Input new result */}
+            <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}>
+              <input value={inputVal} onChange={e=>setInputVal(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&addResult()}
+                placeholder={"Hasil kontrol "+cfg.unit} style={{...IS,width:180,fontSize:13}}/>
+              <button className="pb" onClick={addResult} disabled={!inputVal.trim()} style={{...BP,padding:"8px 16px",fontSize:12}}>+ Tambah Hasil</button>
+              <div style={{fontSize:11,color:T.textT,fontFamily:T.mono}}>Tekan Enter untuk tambah cepat</div>
+            </div>
+
+            {/* IQC Chart */}
+            {level.results?.length>=2&&(()=>{
+              const chartData=buildIQCChart(level);
+              const viols=iqcViolations(level);
+              const violSet=new Set(viols.map(v=>v.idx));
+              const rejSet=new Set(viols.filter(v=>v.rules.some(r=>r.type==="reject")).map(v=>v.idx));
+
+              const CustomDot=(props)=>{
+                const{cx,cy,payload}=props;
+                if(cx==null||cy==null)return null;
+                const idx=payload.idx-1;
+                const color=rejSet.has(idx)?T.danger:violSet.has(idx)?T.warn:IQC_LEVEL_COLORS[activeLevel];
+                return<circle cx={cx} cy={cy} r={rejSet.has(idx)?6:violSet.has(idx)?5:4} fill={color} stroke="#fff" strokeWidth={1.5}/>;
+              };
+
+              const yPad=level.sd*0.8;
+              const yDom=[+(level.target-3.5*level.sd-yPad).toFixed(3),+(level.target+3.5*level.sd+yPad).toFixed(3)];
+
+              return(
+                <div style={{marginBottom:14}}>
+                  <div style={{fontSize:11,fontWeight:600,color:T.text,marginBottom:8}}>
+                    LJ Chart IQC — {level.name||IQC_LEVEL_NAMES[activeLevel]}
+                    {viols.length>0&&<span style={{color:T.danger,fontFamily:T.mono,marginLeft:10}}>⚠ {viols.filter(v=>v.rules.some(r=>r.type==="reject")).length} reject · {viols.filter(v=>v.rules.every(r=>r.type==="warning")).length} warning</span>}
+                  </div>
+                  <ResponsiveContainer width="100%" height={240}>
+                    <ComposedChart data={chartData} margin={{top:4,right:48,bottom:12,left:8}}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(14,165,233,.07)"/>
+                      <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border}/>
+                      <YAxis tick={{fontSize:9,fill:T.textT}} stroke={T.border} domain={yDom} label={{value:cfg.unit,angle:-90,position:"insideLeft",fill:T.textT,fontSize:9,dx:-4}}/>
+                      <Tooltip content={<IQCTT/>}/>
+                      <ReferenceLine y={level.target+3*level.sd} stroke={T.danger} strokeDasharray="4 3" label={{value:"+3SD",fill:T.danger,fontSize:8,position:"right"}}/>
+                      <ReferenceLine y={level.target+2*level.sd} stroke={T.warn} strokeDasharray="4 3" label={{value:"+2SD",fill:T.warn,fontSize:8,position:"right"}}/>
+                      <ReferenceLine y={level.target+level.sd} stroke="#94a3b8" strokeDasharray="3 3" label={{value:"+1SD",fill:T.textT,fontSize:8,position:"right"}}/>
+                      <ReferenceLine y={level.target} stroke={IQC_LEVEL_COLORS[activeLevel]} strokeWidth={2} label={{value:"Target",fill:IQC_LEVEL_COLORS[activeLevel],fontSize:8,position:"right"}}/>
+                      <ReferenceLine y={level.target-level.sd} stroke="#94a3b8" strokeDasharray="3 3" label={{value:"-1SD",fill:T.textT,fontSize:8,position:"right"}}/>
+                      <ReferenceLine y={level.target-2*level.sd} stroke={T.warn} strokeDasharray="4 3" label={{value:"-2SD",fill:T.warn,fontSize:8,position:"right"}}/>
+                      <ReferenceLine y={level.target-3*level.sd} stroke={T.danger} strokeDasharray="4 3" label={{value:"-3SD",fill:T.danger,fontSize:8,position:"right"}}/>
+                      <Line dataKey="value" stroke={IQC_LEVEL_COLORS[activeLevel]} strokeWidth={1.5} dot={<CustomDot/>} activeDot={false} connectNulls isAnimationActive={false}/>
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              );
+            })()}
+
+            {/* Violation summary */}
+            {level.results?.length>=2&&(()=>{
+              const viols=iqcViolations(level);
+              if(viols.length===0)return(
+                <div style={{padding:"10px 14px",background:"#ecfdf5",borderRadius:8,border:`1px solid ${T.ok}44`,fontSize:12,color:T.ok,fontWeight:600}}>
+                  ✅ Tidak ada pelanggaran Westgard
+                </div>
+              );
+              const ruleCount={};
+              viols.forEach(v=>v.rules.forEach(r=>{ruleCount[r.rule]=(ruleCount[r.rule]||0)+1;}));
+              return(
+                <div style={{padding:"10px 14px",background:"#fef2f2",borderRadius:8,border:`1px solid ${T.danger}44`,fontSize:12}}>
+                  <div style={{fontWeight:700,color:T.danger,marginBottom:6}}>⚠ Westgard Violations IQC</div>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                    {Object.entries(ruleCount).map(([rule,n])=>(
+                      <span key={rule} style={{padding:"2px 10px",borderRadius:10,background:T.danger+"18",color:T.danger,fontFamily:T.mono,fontWeight:700,fontSize:11}}>{rule}: {n}×</span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+      </div>
+
+      {/* Setup modal */}
+      {showSetup&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",zIndex:999,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setShowSetup(false)}>
+          <div style={{background:T.surface,borderRadius:16,padding:28,width:380,boxShadow:"0 20px 60px rgba(0,0,0,.15)"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:14,fontWeight:700,color:T.text,marginBottom:18}}>Setup {IQC_LEVEL_NAMES[activeLevel]}</div>
+            {[
+              {l:"Nama Level",k:"name",ph:"Contoh: Kontrol Normal"},
+              {l:"Target / Mean ("+cfg.unit+")",k:"target",ph:"Nilai target dari insert kit"},
+              {l:"SD ("+cfg.unit+")",k:"sd",ph:"SD dari insert kit atau perhitungan lab"},
+            ].map(f=>(
+              <div key={f.k} style={{marginBottom:14}}>
+                <div style={LS}>{f.l}</div>
+                <input value={setupForm[f.k]} onChange={e=>setSetupForm(p=>({...p,[f.k]:e.target.value}))} placeholder={f.ph} style={IS}/>
+              </div>
+            ))}
+            <div style={{display:"flex",gap:10,marginTop:4}}>
+              <button className="pb" onClick={setupLevel} style={{...BP,flex:1}}>💾 Simpan</button>
+              <button className="sb" onClick={()=>setShowSetup(false)} style={{...BS,flex:1}}>Batal</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ══ IQC OVERLAY DATA (for PBRTQC chart) ══ */
+function getIQCOverlayPoints(param, ward){
+  const d=loadIQC(param,ward);
+  const pts=[];
+  (d.levels||[]).forEach((lv,li)=>{
+    if(!lv?.results?.length||!lv?.target)return;
+    lv.results.forEach((r,i)=>{
+      const z=(r.v-lv.target)/lv.sd;
+      const reject=Math.abs(z)>3;
+      pts.push({idx:i+1,value:r.v,level:li,color:reject?T.danger:Math.abs(z)>2?T.warn:IQC_LEVEL_COLORS[li],reject,label:"IQC L"+(li+1)});
+    });
+  });
+  return pts;
+}
+
 /* ══ MAIN QC PANEL ══ */
 function QCPanel({data,cfg,blockSize,mult,useAoN,selMethods,apiKey,wardKey,wardLabel,paramLabel,param,onSave}){
   const working=useMemo(()=>!data?null:useAoN?data.filter(v=>v>=cfg.refLow&&v<=cfg.refHigh):data,[data,useAoN,cfg]);
-  const series=useMemo(()=>{if(!working||working.length<blockSize)return null;return{MA:calcMA(working,blockSize),EWMA:calcEWMA(working),TRIM:calcTrim(working,blockSize,cfg.trim),MEDIAN:calcMed(working,blockSize)};},[working,blockSize,cfg]);
+  const[transform,setTransform]=useState("none");
+  const[autoTx,setAutoTx]=useState(false);
+  const activeTx=useMemo(()=>autoTx&&working?autoTransform(working):transform,[autoTx,transform,working]);
+  const txData=useMemo(()=>!working?null:activeTx==="none"?working:applyTransform(working,activeTx).filter(v=>v!==null),[working,activeTx]);
+  const txStats=useMemo(()=>{if(!txData||!txData.length)return null;const m=avg(txData),s=std(txData);return{skew:+skewness(txData).toFixed(3),mean:m,sd:s,cv:(s/m)*100};},[txData]);
+  const rawSkew=useMemo(()=>working?+skewness(working).toFixed(3):null,[working]);
+  const series=useMemo(()=>{
+    const d=txData||working;
+    if(!d||d.length<blockSize)return null;
+    const s={MA:calcMA(d,blockSize),EWMA:calcEWMA(d),TRIM:calcTrim(d,blockSize,cfg.trim),MEDIAN:calcMed(d,blockSize),MOVMED:calcMovMed(d,blockSize)};
+    return s;
+  },[txData,working,blockSize,cfg]);
   const limits=useMemo(()=>{if(!series)return null;const o={};Object.keys(series).forEach(m=>{o[m]=getLimits(series[m],mult);});return o;},[series,mult]);
   const violations=useMemo(()=>{if(!series||!limits)return null;const o={};Object.keys(series).forEach(m=>{o[m]=series[m].map((v,i)=>({idx:i,value:v,viol:v!==null&&(v>limits[m].ucl||v<limits[m].lcl)})).filter(d=>d.viol);});return o;},[series,limits]);
   const stats=useMemo(()=>{if(!working||!working.length)return null;const m=avg(working),s=std(working);return{n:working.length,mean:m,sd:s,cv:(s/m)*100,median:med(working)};},[working]);
-  const ljMean=stats?.mean||0,ljSd=stats?.sd||1;
+  const ljMean=(txStats?.mean||stats?.mean)||0;
+  const ljSd=(txStats?.sd||stats?.sd)||1;
   // Init sigma from saved/default values so stat card shows immediately
   const _initSigma=(()=>{
     const sk=`${param}_${wardKey}`;
@@ -1176,18 +1619,24 @@ function QCPanel({data,cfg,blockSize,mult,useAoN,selMethods,apiKey,wardKey,wardL
     </div>}
 
     {/* Save to Supabase */}
-    <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:16}}>
+    <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:14}}>
       <button className="pb" onClick={saveToDb} disabled={saving} style={{...BP,display:"flex",alignItems:"center",gap:6,padding:"7px 16px",fontSize:11,background:"#0369a1"}}>
         {saving?<><Sp/> Menyimpan...</>:"☁️ Simpan ke Supabase"}
       </button>
       {savedMsg&&<div style={{fontSize:12,color:savedMsg.startsWith("✅")?T.ok:T.danger,fontFamily:T.mono}}>{savedMsg}</div>}
     </div>
 
+    {/* Transformation Panel */}
+    <TransformPanel working={working} transform={transform} setTransform={setTransform} autoTx={autoTx} setAutoTx={setAutoTx} activeTx={activeTx} rawSkew={rawSkew} txStats={txStats} paramLabel={paramLabel}/>
+
+    {/* IQC Panel */}
+    <IQCPanel param={param} ward={wardKey} wardLabel={wardLabel} paramLabel={paramLabel} cfg={cfg} sigmaTierCurrent={sigmaTierCurrent} apiKey={apiKey}/>
+
     {/* Sigma Panel */}
     <SigmaPanel param={param} ward={wardKey} cfg={cfg} stats={stats} onSigmaChange={handleSigmaChange} paramLabel={paramLabel}/>
 
     {/* Levey-Jennings Chart */}
-    {stats&&<div style={{marginBottom:16}}><LJChart values={working} mean={stats.mean} sdVal={stats.sd} paramLabel={paramLabel} wardLabel={wardLabel} unit={cfg.unit} violations={wgViolations} sigmaTier={sigmaTierCurrent}/></div>}
+    {stats&&<div style={{marginBottom:16}}><LJChart values={workingForLJ} mean={txStats?.mean||stats.mean} sdVal={txStats?.sd||stats.sd} paramLabel={paramLabel+(activeTx!=="none"?" ["+transformLabel(activeTx)+"]":"")} wardLabel={wardLabel} unit={activeTx!=="none"?"transformed":cfg.unit} violations={wgViolations} sigmaTier={sigmaTierCurrent}/></div>}
 
     {/* PBRTQC Chart */}
     {chartData.length>0&&series&&limits&&(()=>{
@@ -1201,7 +1650,7 @@ function QCPanel({data,cfg,blockSize,mult,useAoN,selMethods,apiKey,wardKey,wardL
 
       // Zoom state for PBRTQC chart
       return(
-        <PBRTQCChart chartData={chartData} selMethods={selMethods} limits={limits} cfg={cfg} paramLabel={paramLabel} TT={TT} yDomain={pbrtqcYDomain}/>
+        <PBRTQCChart chartData={chartData} selMethods={selMethods} limits={limits} cfg={cfg} paramLabel={paramLabel} TT={TT} yDomain={pbrtqcYDomain} iqcPoints={getIQCOverlayPoints(param,wardKey)} activeTx={activeTx}/>
       );
     })()}
 
@@ -1767,7 +2216,7 @@ export default function PasienQuC(){
   const[blockSize,setBlockSize]=useState(20);
   const[mult,setMult]=useState(2);
   const[useAoN,setUseAoN]=useState(false);
-  const[selMethods,setSelMethods]=useState(["MA","EWMA","TRIM","MEDIAN"]);
+  const[selMethods,setSelMethods]=useState(["MA","EWMA","TRIM","MEDIAN","MOVMED"]);
   const[wardData,setWardData]=useState({});
   const[pasteText,setPasteText]=useState("");
   const[mounted,setMounted]=useState(false);
