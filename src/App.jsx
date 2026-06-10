@@ -110,21 +110,25 @@ async function aiChat(apiKey,messages,onChunk){
 }
 
 /* ══ MATH ══ */
-const avg=a=>a.reduce((s,v)=>s+v,0)/a.length;
-const std=a=>{const m=avg(a);return Math.sqrt(a.reduce((s,v)=>s+(v-m)**2,0)/a.length);};
-const med=a=>{const s=[...a].sort((x,y)=>x-y),m=Math.floor(s.length/2);return s.length%2?s[m]:(s[m-1]+s[m])/2;};
+const safeArr=a=>(a||[]).filter(v=>v!==null&&v!==undefined&&!isNaN(v)&&isFinite(v));
+const avg=a=>{const s=safeArr(a);return s.length?s.reduce((t,v)=>t+v,0)/s.length:0;};
+const std=a=>{const s=safeArr(a);if(!s.length)return 0;const m=avg(s);return Math.sqrt(s.reduce((t,v)=>t+(v-m)**2,0)/s.length);};
+const med=a=>{const s=[...safeArr(a)].sort((x,y)=>x-y);if(!s.length)return 0;const m=Math.floor(s.length/2);return s.length%2?s[m]:(s[m-1]+s[m])/2;};
 const calcMA=(v,n)=>v.map((_,i)=>i<n-1?null:+avg(v.slice(i-n+1,i+1)).toFixed(3));
 const calcEWMA=(v,l=.2)=>{let e=v[0];return v.map(x=>+(e=l*x+(1-l)*e).toFixed(3));};
 const calcTrim=(v,n,f)=>v.map((_,i)=>{if(i<n-1)return null;const s=[...v.slice(i-n+1,i+1)].sort((a,b)=>a-b),k=Math.floor(s.length*f),t=s.slice(k,s.length-k);return +avg(t).toFixed(3);});
 const calcMed=(v,n)=>v.map((_,i)=>i<n-1?null:+med(v.slice(i-n+1,i+1)).toFixed(3));
 const calcMovMed=(v,n)=>v.map((_,i)=>i<n-1?null:+med(v.slice(i-n+1,i+1)).toFixed(3));
-const getLimits=(v,mult)=>{const vals=v.filter(x=>x!==null),m=avg(vals),s=std(vals);return{target:m,ucl:m+mult*s,lcl:m-mult*s,sd:s};};
+const getLimits=(v,mult)=>{const vals=v.filter(x=>x!==null&&!isNaN(x));if(!vals.length)return{target:0,ucl:0,lcl:0,sd:0};const m=avg(vals),s=std(vals);return{target:m,ucl:m+mult*s,lcl:m-mult*s,sd:s};};
 
 /* ══ DATA TRANSFORMATION ENGINE ══ */
 function skewness(vals){
-  const n=vals.length,m=avg(vals),s=std(vals);
+  const sv=safeArr(vals);
+  const n=sv.length;
+  if(n<3)return 0;
+  const m=avg(sv),s=std(sv);
   if(s===0)return 0;
-  return vals.reduce((a,v)=>a+Math.pow((v-m)/s,3),0)/n;
+  return sv.reduce((a,v)=>a+Math.pow((v-m)/s,3),0)/n;
 }
 function applyTransform(vals, method){
   switch(method){
@@ -140,17 +144,18 @@ function applyTransform(vals, method){
     }
     case"boxcox":{
       // Find optimal lambda via simple grid search (max log-likelihood)
-      if(vals.some(v=>v<=0))return vals; // BoxCox requires positive values
+      const safeVals=safeArr(vals).filter(v=>v>0);
+      if(!safeVals.length||safeVals.length!==vals.length)return vals; // BoxCox requires positive values
       const lambdas=[-2,-1.5,-1,-.5,0,.5,1,1.5,2];
       let bestL=1,bestLL=-Infinity;
       lambdas.forEach(l=>{
-        const tx=l===0?vals.map(v=>Math.log(v)):vals.map(v=>(Math.pow(v,l)-1)/l);
+        const tx=l===0?safeVals.map(v=>Math.log(v)):safeVals.map(v=>(Math.pow(v,l)-1)/l);
         const m=avg(tx),s=std(tx);
         if(s===0)return;
-        const ll=-tx.length*Math.log(s)+(l-1)*vals.reduce((a,v)=>a+Math.log(v),0);
+        const ll=-tx.length*Math.log(s)+(l-1)*safeVals.reduce((a,v)=>a+Math.log(v),0);
         if(ll>bestLL){bestLL=ll;bestL=l;}
       });
-      return bestL===0?vals.map(v=>+Math.log(v).toFixed(4)):vals.map(v=>+((Math.pow(v,bestL)-1)/bestL).toFixed(4));
+      return bestL===0?safeVals.map(v=>+Math.log(v).toFixed(4)):safeVals.map(v=>+((Math.pow(v,bestL)-1)/bestL).toFixed(4));
     }
     default: return vals;
   }
@@ -216,15 +221,17 @@ function getSigmaTier(sigma) {
 // Sigma-aware Westgard checker
 function checkWestgard(values, mean, sd, sigmaTier) {
   const violations = [];
-  const n = values.length;
-  if (n === 0) return violations;
+  const sv = safeArr(values||[]);
+  const n = sv.length;
+  if (n === 0 || !sd || isNaN(sd) || sd === 0) return violations;
+  const values2 = sv; // use safe array
   // Which rules are active based on sigma tier
   const active = sigmaTier?.activeRules || {
     "1₂s": true, "1₃s": true, "2₂s": true, "R₄s": true, "4₁s": true, "10x": true
   };
 
   for (let i = 0; i < n; i++) {
-    const v = values[i];
+    const v = values2[i];
     const z = (v - mean) / sd;
     const rules = [];
 
@@ -234,7 +241,7 @@ function checkWestgard(values, mean, sd, sigmaTier) {
       rules.push({ rule: "1₃s", type: "reject", desc: "1 titik > ±3SD (reject)" });
 
     if (i >= 1) {
-      const z1 = (values[i-1] - mean) / sd;
+      const z1 = (values2[i-1] - mean) / sd;
       if (active["2₂s"]) {
         if (z > 2 && z1 > 2) rules.push({ rule: "2₂s", type: "reject", desc: "2 berturut > +2SD" });
         if (z < -2 && z1 < -2) rules.push({ rule: "2₂s", type: "reject", desc: "2 berturut < -2SD" });
@@ -244,13 +251,13 @@ function checkWestgard(values, mean, sd, sigmaTier) {
     }
 
     if (active["4₁s"] && i >= 3) {
-      const zs = [values[i],values[i-1],values[i-2],values[i-3]].map(x=>(x-mean)/sd);
+      const zs = [values2[i],values2[i-1],values2[i-2],values2[i-3]].map(x=>(x-mean)/sd);
       if (zs.every(z=>z>1)) rules.push({ rule: "4₁s", type: "reject", desc: "4 berturut > +1SD" });
       if (zs.every(z=>z<-1)) rules.push({ rule: "4₁s", type: "reject", desc: "4 berturut < -1SD" });
     }
 
     if (active["10x"] && i >= 9) {
-      const zs = values.slice(i-9, i+1).map(x=>(x-mean)/sd);
+      const zs = values2.slice(i-9, i+1).map(x=>(x-mean)/sd);
       if (zs.every(z=>z>0)) rules.push({ rule: "10x", type: "reject", desc: "10 berturut di atas mean" });
       if (zs.every(z=>z<0)) rules.push({ rule: "10x", type: "reject", desc: "10 berturut di bawah mean" });
     }
@@ -1325,8 +1332,10 @@ function IQCPanel({param, ward, wardLabel, paramLabel, cfg, sigmaTierCurrent, ap
 
   // Westgard check on IQC data
   const iqcViolations=(lv)=>{
-    if(!lv?.target||!lv?.sd||!lv?.results?.length)return[];
-    return checkWestgard(lv.results.map(r=>r.v),lv.target,lv.sd,sigmaTierCurrent);
+    if(!lv?.target||!lv?.sd||!lv?.results?.length||lv.sd<=0)return[];
+    const vals=lv.results.map(r=>r.v).filter(v=>!isNaN(v));
+    if(!vals.length)return[];
+    return checkWestgard(vals,lv.target,lv.sd,sigmaTierCurrent);
   };
 
   // IQC Chart tooltip
@@ -1400,7 +1409,7 @@ function IQCPanel({param, ward, wardLabel, paramLabel, cfg, sigmaTierCurrent, ap
                 {[
                   ["Target",level.target.toFixed?level.target.toFixed(3):level.target,cfg.unit],
                   ["SD",level.sd.toFixed?level.sd.toFixed(3):level.sd,""],
-                  ["CV%",level.sd&&level.target?(level.sd/level.target*100).toFixed(2)+"%":"—",""],
+                  ["CV%",(level.sd&&level.target&&level.target!==0)?(level.sd/level.target*100).toFixed(2)+"%":"—",""],
                   ["N runs",level.results?.length||0,"hasil"],
                 ].map(([l,v,u])=>(
                   <div key={l} style={{textAlign:"center"}}>
@@ -1542,17 +1551,19 @@ function QCPanel({data,cfg,blockSize,mult,useAoN,selMethods,apiKey,wardKey,wardL
   const[autoTx,setAutoTx]=useState(false);
   const activeTx=useMemo(()=>autoTx&&working?autoTransform(working):transform,[autoTx,transform,working]);
   const txData=useMemo(()=>!working?null:activeTx==="none"?working:applyTransform(working,activeTx).filter(v=>v!==null),[working,activeTx]);
-  const txStats=useMemo(()=>{if(!txData||!txData.length)return null;const m=avg(txData),s=std(txData);return{skew:+skewness(txData).toFixed(3),mean:m,sd:s,cv:(s/m)*100};},[txData]);
-  const rawSkew=useMemo(()=>working?+skewness(working).toFixed(3):null,[working]);
+  const txStats=useMemo(()=>{if(!txData||!txData.length)return null;const sa=safeArr(txData);if(!sa.length)return null;const m=avg(sa),s=std(sa);return{skew:+skewness(sa).toFixed(3),mean:m,sd:s,cv:m?((s/m)*100):0};},[txData]);
+  const rawSkew=useMemo(()=>working&&working.length>=3?+skewness(working).toFixed(3):null,[working]);
   const series=useMemo(()=>{
     const d=txData||working;
     if(!d||d.length<blockSize)return null;
     const s={MA:calcMA(d,blockSize),EWMA:calcEWMA(d),TRIM:calcTrim(d,blockSize,cfg.trim),MEDIAN:calcMed(d,blockSize),MOVMED:calcMovMed(d,blockSize)};
-    return s;
+    // Remove methods that produce all-null series (e.g. MOVMED with tiny dataset)
+    Object.keys(s).forEach(m=>{if(s[m].every(v=>v===null))delete s[m];});
+    return Object.keys(s).length?s:null;
   },[txData,working,blockSize,cfg]);
   const limits=useMemo(()=>{if(!series)return null;const o={};Object.keys(series).forEach(m=>{o[m]=getLimits(series[m],mult);});return o;},[series,mult]);
-  const violations=useMemo(()=>{if(!series||!limits)return null;const o={};Object.keys(series).forEach(m=>{o[m]=series[m].map((v,i)=>({idx:i,value:v,viol:v!==null&&(v>limits[m].ucl||v<limits[m].lcl)})).filter(d=>d.viol);});return o;},[series,limits]);
-  const stats=useMemo(()=>{if(!working||!working.length)return null;const m=avg(working),s=std(working);return{n:working.length,mean:m,sd:s,cv:(s/m)*100,median:med(working)};},[working]);
+  const violations=useMemo(()=>{if(!series||!limits)return null;const o={};Object.keys(series).forEach(m=>{if(!limits[m]||!limits[m].ucl)return;o[m]=series[m].map((v,i)=>({idx:i,value:v,viol:v!==null&&!isNaN(v)&&(v>limits[m].ucl||v<limits[m].lcl)})).filter(d=>d.viol);});return o;},[series,limits]);
+  const stats=useMemo(()=>{if(!working||!working.length)return null;const sa=safeArr(working);if(!sa.length)return null;const m=avg(sa),s=std(sa);return{n:sa.length,mean:m,sd:s,cv:m?((s/m)*100):0,median:med(sa)};},[working]);
   const ljMean=(txStats?.mean||stats?.mean)||0;
   const ljSd=(txStats?.sd||stats?.sd)||1;
   // Init sigma from saved/default values so stat card shows immediately
@@ -2216,7 +2227,7 @@ export default function PasienQuC(){
   const[blockSize,setBlockSize]=useState(20);
   const[mult,setMult]=useState(2);
   const[useAoN,setUseAoN]=useState(false);
-  const[selMethods,setSelMethods]=useState(["MA","EWMA","TRIM","MEDIAN","MOVMED"]);
+  const[selMethods,setSelMethods]=useState(["MA","EWMA","TRIM","MEDIAN"]);
   const[wardData,setWardData]=useState({});
   const[pasteText,setPasteText]=useState("");
   const[mounted,setMounted]=useState(false);
