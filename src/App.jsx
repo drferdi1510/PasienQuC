@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  ReferenceLine, ReferenceArea, ResponsiveContainer, BarChart, Bar, ComposedChart
+  ReferenceLine, ResponsiveContainer, BarChart, Bar, ComposedChart, Scatter
 } from "recharts";
 
 /* ─── Fonts ─── */
@@ -110,7 +110,7 @@ async function aiChat(apiKey,messages,onChunk){
 }
 
 /* ══ MATH ══ */
-const safeArr=a=>(a||[]).filter(v=>v!==null&&v!==undefined&&!isNaN(v)&&isFinite(v));
+const safeArr=a=>(a||[]).filter(v=>v!=null&&!isNaN(v)&&isFinite(v));
 const avg=a=>{const s=safeArr(a);return s.length?s.reduce((t,v)=>t+v,0)/s.length:0;};
 const std=a=>{const s=safeArr(a);if(!s.length)return 0;const m=avg(s);return Math.sqrt(s.reduce((t,v)=>t+(v-m)**2,0)/s.length);};
 const med=a=>{const s=[...safeArr(a)].sort((x,y)=>x-y);if(!s.length)return 0;const m=Math.floor(s.length/2);return s.length%2?s[m]:(s[m-1]+s[m])/2;};
@@ -118,146 +118,51 @@ const calcMA=(v,n)=>v.map((_,i)=>i<n-1?null:+avg(v.slice(i-n+1,i+1)).toFixed(3))
 const calcEWMA=(v,l=.2)=>{let e=v[0];return v.map(x=>+(e=l*x+(1-l)*e).toFixed(3));};
 const calcTrim=(v,n,f)=>v.map((_,i)=>{if(i<n-1)return null;const s=[...v.slice(i-n+1,i+1)].sort((a,b)=>a-b),k=Math.floor(s.length*f),t=s.slice(k,s.length-k);return +avg(t).toFixed(3);});
 const calcMed=(v,n)=>v.map((_,i)=>i<n-1?null:+med(v.slice(i-n+1,i+1)).toFixed(3));
-const calcMovMed=(v,n)=>v.map((_,i)=>i<n-1?null:+med(v.slice(i-n+1,i+1)).toFixed(3));
-const getLimits=(v,mult)=>{const vals=v.filter(x=>x!==null&&!isNaN(x));if(!vals.length)return{target:0,ucl:0,lcl:0,sd:0};const m=avg(vals),s=std(vals);return{target:m,ucl:m+mult*s,lcl:m-mult*s,sd:s};};
-
 /* ══ DATA TRANSFORMATION ENGINE ══ */
-function skewness(vals){
-  const sv=safeArr(vals);
-  const n=sv.length;
-  if(n<3)return 0;
-  const m=avg(sv),s=std(sv);
-  if(s===0)return 0;
-  return sv.reduce((a,v)=>a+Math.pow((v-m)/s,3),0)/n;
-}
-function applyTransform(vals, method){
-  switch(method){
-    case"log10": return vals.map(v=>v>0?+Math.log10(v).toFixed(4):null);
-    case"ln":    return vals.map(v=>v>0?+Math.log(v).toFixed(4):null);
-    case"sqrt":  return vals.map(v=>v>=0?+Math.sqrt(v).toFixed(4):null);
-    case"inverse": return vals.map(v=>v!==0?+(1/v).toFixed(4):null);
-    case"winsor":{
-      const s=[...vals].sort((a,b)=>a-b);
-      const q1=s[Math.floor(s.length*.25)],q3=s[Math.floor(s.length*.75)];
-      const iqr=q3-q1,lo=q1-1.5*iqr,hi=q3+1.5*iqr;
-      return vals.map(v=>+Math.min(Math.max(v,lo),hi).toFixed(4));
-    }
-    case"boxcox":{
-      // Find optimal lambda via simple grid search (max log-likelihood)
-      const safeVals=safeArr(vals).filter(v=>v>0);
-      if(!safeVals.length||safeVals.length!==vals.length)return vals; // BoxCox requires positive values
-      const lambdas=[-2,-1.5,-1,-.5,0,.5,1,1.5,2];
-      let bestL=1,bestLL=-Infinity;
-      lambdas.forEach(l=>{
-        const tx=l===0?safeVals.map(v=>Math.log(v)):safeVals.map(v=>(Math.pow(v,l)-1)/l);
-        const m=avg(tx),s=std(tx);
-        if(s===0)return;
-        const ll=-tx.length*Math.log(s)+(l-1)*safeVals.reduce((a,v)=>a+Math.log(v),0);
-        if(ll>bestLL){bestLL=ll;bestL=l;}
-      });
-      return bestL===0?safeVals.map(v=>+Math.log(v).toFixed(4)):safeVals.map(v=>+((Math.pow(v,bestL)-1)/bestL).toFixed(4));
-    }
-    default: return vals;
-  }
-}
-function autoTransform(vals){
-  const sk=skewness(vals);
-  if(Math.abs(sk)<0.5)return"none";
-  if(sk>1.5)return"log10";
-  if(sk>0.5)return"sqrt";
-  if(sk<-1.5)return"inverse";
-  return"winsor";
-}
-function transformLabel(method){
-  return{none:"None",log10:"Log₁₀",ln:"Ln",sqrt:"√x",inverse:"1/x",winsor:"Winsorization",boxcox:"Box-Cox"}[method]||method;
-}
+function skewness(vals){const sv=safeArr(vals);if(sv.length<3)return 0;const m=avg(sv),s=std(sv);if(s===0)return 0;return sv.reduce((a,v)=>a+Math.pow((v-m)/s,3),0)/sv.length;}
+function applyTransform(vals,method){const sv=safeArr(vals);switch(method){case"log10":return sv.map(v=>v>0?+Math.log10(v).toFixed(4):null).filter(v=>v!==null);case"ln":return sv.map(v=>v>0?+Math.log(v).toFixed(4):null).filter(v=>v!==null);case"sqrt":return sv.map(v=>v>=0?+Math.sqrt(v).toFixed(4):null).filter(v=>v!==null);case"inverse":return sv.map(v=>v!==0?+(1/v).toFixed(4):null).filter(v=>v!==null);case"winsor":{const s=[...sv].sort((a,b)=>a-b),q1=s[Math.floor(s.length*.25)],q3=s[Math.floor(s.length*.75)],iqr=q3-q1,lo=q1-1.5*iqr,hi=q3+1.5*iqr;return sv.map(v=>+Math.min(Math.max(v,lo),hi).toFixed(4));}case"boxcox":{const pos=sv.filter(v=>v>0);if(pos.length!==sv.length)return sv;const lambdas=[-2,-1.5,-1,-.5,0,.5,1,1.5,2];let bestL=1,bestLL=-Infinity;lambdas.forEach(l=>{const tx=l===0?pos.map(v=>Math.log(v)):pos.map(v=>(Math.pow(v,l)-1)/l);const s2=std(tx);if(s2===0)return;const ll=-tx.length*Math.log(s2)+(l-1)*pos.reduce((a,v)=>a+Math.log(v),0);if(ll>bestLL){bestLL=ll;bestL=l;}});return bestL===0?pos.map(v=>+Math.log(v).toFixed(4)):pos.map(v=>+((Math.pow(v,bestL)-1)/bestL).toFixed(4));}default:return sv;}}
+function autoTransform(vals){const sk=skewness(vals);if(Math.abs(sk)<0.5)return"none";if(sk>1.5)return"log10";if(sk>0.5)return"sqrt";if(sk<-1.5)return"inverse";return"winsor";}
+function transformLabel(m){return{none:"None",log10:"Log₁₀",ln:"Ln",sqrt:"√x",inverse:"1/x",winsor:"Winsorization",boxcox:"Box-Cox"}[m]||m;}
+const calcMovMed=(v,n)=>v.map((_,i)=>i<n-1?null:+med(safeArr(v.slice(i-n+1,i+1))).toFixed(3));
+const getLimits=(v,mult)=>{const vals=safeArr(v);if(!vals.length)return{target:0,ucl:0,lcl:0,sd:0};const m=avg(vals),s=std(vals);return{target:m,ucl:m+mult*s,lcl:m-mult*s,sd:s};};
 
 /* ══ WESTGARD RULES ══ */
-/* ══ SIGMA TIER SYSTEM ══ */
-// Get sigma tier and recommended Westgard rules based on sigma value
-function getSigmaTier(sigma) {
-  if (sigma >= 6) return {
-    tier: "A", label: "World Class", color: "#059669", bg: "#ecfdf5",
-    border: "#6ee7b7",
-    rules: ["1₃s"],
-    activeRules: { "1₂s": false, "1₃s": true, "2₂s": false, "R₄s": false, "4₁s": false, "10x": false },
-    qcLevels: 2, qcFreq: "1×/hari",
-    description: "Hanya 1₃s diperlukan. QC minimal sudah cukup.",
-  };
-  if (sigma >= 5) return {
-    tier: "B", label: "Excellent", color: "#0ea5e9", bg: "#e0f2fe",
-    border: "#7dd3fc",
-    rules: ["1₂s","1₃s"],
-    activeRules: { "1₂s": true, "1₃s": true, "2₂s": false, "R₄s": false, "4₁s": false, "10x": false },
-    qcLevels: 2, qcFreq: "1×/hari",
-    description: "1₂s sebagai warning, 1₃s sebagai reject.",
-  };
-  if (sigma >= 4) return {
-    tier: "C", label: "Good", color: "#2563eb", bg: "#eff6ff",
-    border: "#93c5fd",
-    rules: ["1₂s","1₃s","2₂s","R₄s"],
-    activeRules: { "1₂s": true, "1₃s": true, "2₂s": true, "R₄s": true, "4₁s": false, "10x": false },
-    qcLevels: 2, qcFreq: "2×/hari",
-    description: "Westgard multirule standar: 1₂s·2₂s·R₄s.",
-  };
-  if (sigma >= 3) return {
-    tier: "D", label: "Marginal", color: "#d97706", bg: "#fffbeb",
-    border: "#fcd34d",
-    rules: ["1₂s","1₃s","2₂s","R₄s","4₁s","10x"],
-    activeRules: { "1₂s": true, "1₃s": true, "2₂s": true, "R₄s": true, "4₁s": true, "10x": true },
-    qcLevels: 3, qcFreq: "4×/hari",
-    description: "Semua rules aktif. QC ketat, 3 level kontrol.",
-  };
-  return {
-    tier: "E", label: "Poor / Unacceptable", color: "#dc2626", bg: "#fef2f2",
-    border: "#fca5a5",
-    rules: ["1₂s","1₃s","2₂s","R₄s","4₁s","10x"],
-    activeRules: { "1₂s": true, "1₃s": true, "2₂s": true, "R₄s": true, "4₁s": true, "10x": true },
-    qcLevels: 3, qcFreq: "6×/hari",
-    description: "Performa tidak acceptable. Investigasi metode diperlukan sebelum QC.",
-  };
-}
-
-// Sigma-aware Westgard checker
 function checkWestgard(values, mean, sd, sigmaTier) {
   const violations = [];
-  const sv = safeArr(values||[]);
-  const n = sv.length;
+  const vals = safeArr(values||[]);
+  const n = vals.length;
   if (n === 0 || !sd || isNaN(sd) || sd === 0) return violations;
-  const values2 = sv; // use safe array
-  // Which rules are active based on sigma tier
-  const active = sigmaTier?.activeRules || {
-    "1₂s": true, "1₃s": true, "2₂s": true, "R₄s": true, "4₁s": true, "10x": true
-  };
+  const active = sigmaTier?.activeRules || {'1₂s':true,'1₃s':true,'2₂s':true,'R₄s':true,'4₁s':true,'10x':true};
 
   for (let i = 0; i < n; i++) {
-    const v = values2[i];
+    const v = vals[i];
     const z = (v - mean) / sd;
     const rules = [];
 
-    if (active["1₂s"] && Math.abs(z) > 2 && Math.abs(z) <= 3)
-      rules.push({ rule: "1₂s", type: "warning", desc: "1 titik > ±2SD (warning)" });
-    if (active["1₃s"] && Math.abs(z) > 3)
-      rules.push({ rule: "1₃s", type: "reject", desc: "1 titik > ±3SD (reject)" });
+    // 1_2s — warning
+    if (active["1₂s"] && Math.abs(z) > 2 && Math.abs(z) <= 3) rules.push({ rule: "1₂s", type: "warning", desc: "1 titik > ±2SD (warning)" });
+    // 1_3s — rejection
+    if (active["1₃s"] && Math.abs(z) > 3) rules.push({ rule: "1₃s", type: "reject", desc: "1 titik > ±3SD (reject)" });
 
+    // 2_2s — 2 consecutive > 2SD same side
     if (i >= 1) {
-      const z1 = (values2[i-1] - mean) / sd;
-      if (active["2₂s"]) {
-        if (z > 2 && z1 > 2) rules.push({ rule: "2₂s", type: "reject", desc: "2 berturut > +2SD" });
-        if (z < -2 && z1 < -2) rules.push({ rule: "2₂s", type: "reject", desc: "2 berturut < -2SD" });
-      }
-      if (active["R₄s"] && Math.abs(z - z1) > 4)
-        rules.push({ rule: "R₄s", type: "reject", desc: "Range 2 titik berturut > 4SD" });
+      const z1 = (vals[i-1] - mean) / sd;
+      if (z > 2 && z1 > 2) rules.push({ rule: "2₂s", type: "reject", desc: "2 berturut > +2SD" });
+      if (z < -2 && z1 < -2) rules.push({ rule: "2₂s", type: "reject", desc: "2 berturut < -2SD" });
+      // R_4s — range > 4SD
+      if (Math.abs(z - z1) > 4) rules.push({ rule: "R₄s", type: "reject", desc: "Range 2 titik berturut > 4SD" });
     }
 
-    if (active["4₁s"] && i >= 3) {
-      const zs = [values2[i],values2[i-1],values2[i-2],values2[i-3]].map(x=>(x-mean)/sd);
+    // 4_1s — 4 consecutive > 1SD same side
+    if (i >= 3) {
+      const zs = [vals[i],vals[i-1],vals[i-2],vals[i-3]].map(x=>(x-mean)/sd);
       if (zs.every(z=>z>1)) rules.push({ rule: "4₁s", type: "reject", desc: "4 berturut > +1SD" });
       if (zs.every(z=>z<-1)) rules.push({ rule: "4₁s", type: "reject", desc: "4 berturut < -1SD" });
     }
 
-    if (active["10x"] && i >= 9) {
-      const zs = values2.slice(i-9, i+1).map(x=>(x-mean)/sd);
+    // 10x — 10 consecutive same side of mean
+    if (i >= 9) {
+      const zs = vals.slice(i-9, i+1).map(x=>(x-mean)/sd);
       if (zs.every(z=>z>0)) rules.push({ rule: "10x", type: "reject", desc: "10 berturut di atas mean" });
       if (zs.every(z=>z<0)) rules.push({ rule: "10x", type: "reject", desc: "10 berturut di bawah mean" });
     }
@@ -265,6 +170,24 @@ function checkWestgard(values, mean, sd, sigmaTier) {
     if (rules.length > 0) violations.push({ idx: i, value: v, z: +z.toFixed(2), rules });
   }
   return violations;
+}
+
+/* ══ SIGMA TIER ══ */
+function getSigmaTier(sigma){
+  if(sigma>=6)return{tier:"A",label:"World Class",color:"#059669",bg:"#ecfdf5",border:"#6ee7b7",rules:["1₃s"],activeRules:{"1₂s":false,"1₃s":true,"2₂s":false,"R₄s":false,"4₁s":false,"10x":false},qcLevels:2,qcFreq:"1×/hari",description:"Hanya 1₃s. QC minimal cukup."};
+  if(sigma>=5)return{tier:"B",label:"Excellent",color:"#0ea5e9",bg:"#e0f2fe",border:"#7dd3fc",rules:["1₂s","1₃s"],activeRules:{"1₂s":true,"1₃s":true,"2₂s":false,"R₄s":false,"4₁s":false,"10x":false},qcLevels:2,qcFreq:"1×/hari",description:"1₂s warning, 1₃s reject."};
+  if(sigma>=4)return{tier:"C",label:"Good",color:"#2563eb",bg:"#eff6ff",border:"#93c5fd",rules:["1₂s","1₃s","2₂s","R₄s"],activeRules:{"1₂s":true,"1₃s":true,"2₂s":true,"R₄s":true,"4₁s":false,"10x":false},qcLevels:2,qcFreq:"2×/hari",description:"Westgard multirule standar."};
+  if(sigma>=3)return{tier:"D",label:"Marginal",color:"#d97706",bg:"#fffbeb",border:"#fcd34d",rules:["1₂s","1₃s","2₂s","R₄s","4₁s","10x"],activeRules:{"1₂s":true,"1₃s":true,"2₂s":true,"R₄s":true,"4₁s":true,"10x":true},qcLevels:3,qcFreq:"4×/hari",description:"Semua rules aktif. QC ketat."};
+  return{tier:"E",label:"Poor",color:"#dc2626",bg:"#fef2f2",border:"#fca5a5",rules:["1₂s","1₃s","2₂s","R₄s","4₁s","10x"],activeRules:{"1₂s":true,"1₃s":true,"2₂s":true,"R₄s":true,"4₁s":true,"10x":true},qcLevels:3,qcFreq:"6×/hari",description:"Tidak acceptable. Investigasi metode."};
+}
+
+/* ══ LJ ZONE COLOR ══ */
+function ljColor(z) {
+  const az = Math.abs(z);
+  if (az > 3) return T.danger;
+  if (az > 2) return T.warn;
+  if (az > 1) return "#f97316";
+  return T.ok;
 }
 
 /* ══ DEMO DATA ══ */
@@ -279,82 +202,11 @@ function genDemo(cfg,ward,n=120){
   });
 }
 
-// Parse numeric string — handle both comma (134,7) and dot (134.7) as decimal
-function parseNum(s){
-  if(s==null||s==="")return NaN;
-  // Replace comma-decimal: "134,7" → "134.7" but only if comma is decimal separator
-  // Detect: if string matches pattern digits,digits (no dot) → comma is decimal
-  const cleaned=s.trim().replace(/\s/g,"");
-  // Pattern: optional minus, digits, comma, digits (European decimal)
-  if(/^-?\d+,\d+$/.test(cleaned)){
-    return parseFloat(cleaned.replace(",","."));
-  }
-  // Already dot-decimal or integer
-  return parseFloat(cleaned.replace(",","."));
-}
-
-// Label aliases: map common full names to param keys
-const PARAM_ALIASES={
-  "natrium":"Na","sodium":"Na","kalium":"K","potassium":"K",
-  "klorida":"Cl","chloride":"Cl","chlorida":"Cl",
-  "glukosa":"Glukosa","glucose":"Glukosa","gula darah":"Glukosa",
-  "hemoglobin":"Hb","haemoglobin":"Hb",
-  "trombosit":"PLT","platelet":"PLT","platelets":"PLT",
-  "leukosit":"WBC","leukocyte":"WBC","wbc":"WBC",
-  "eritrosit":"RBC","erythrocyte":"RBC","rbc":"RBC",
-  "kreatinin":"Kreatinin","creatinine":"Kreatinin","creatinin":"Kreatinin",
-  "ureum":"Ureum","urea":"Ureum","bun":"Ureum",
-  "albumin":"Albumin","bilirubin total":"BilTotal","bilirubin":"BilTotal",
-  "protein total":"TotProt","total protein":"TotProt",
-  "sgot":"SGOT","ast":"SGOT","sgpt":"SGPT","alt":"SGPT",
-  "gamma gt":"GGT","ggt":"GGT",
-  "pt":"PT","aptt":"APTT","inr":"INR",
-  "fibrinogen":"Fibrinogen","d-dimer":"DDimer","d dimer":"DDimer","ddimer":"DDimer",
-  "ph":"pH","pco2":"pCO2","po2":"pO2","hco3":"HCO3","be":"BE","sao2":"SaO2","laktat":"Laktat","lactate":"Laktat",
-  "ph urin":"pHUrin","bj urin":"BJUrin","berat jenis":"BJUrin",
-  "protein urin":"ProtUrin","glukosa urin":"GluUrin",
-  "crp":"CRP","c-reactive protein":"CRP","prokalsitonin":"PCT","procalcitonin":"PCT",
-  "ferritin":"Ferritin","il-6":"IL6","il6":"IL6","interleukin-6":"IL6",
-  "mcv":"MCV","mch":"MCH","mchc":"MCHC",
-};
-
-function resolveParamKey(headerName, currentParam){
-  const lower=headerName.toLowerCase().trim();
-  // 1. Exact match with current param (case-insensitive)
-  if(lower===currentParam.toLowerCase())return headerName;
-  // 2. Check aliases
-  if(PARAM_ALIASES[lower])return headerName; // will be resolved in handlePaste
-  // 3. Partial match with current param name
-  if(lower.includes(currentParam.toLowerCase()))return headerName;
-  return null;
-}
-
 function parseCSV(txt){
   const lines=txt.trim().split(/\r?\n/).filter(Boolean);
   if(lines.length<2)return null;
-  // Detect delimiter: if first data line has semicolons or tabs, use those
-  // Also handle single-column data (no delimiter needed)
-  const firstData=lines[1];
-  let delim=";";
-  if(firstData.includes("\t"))delim="\t";
-  else if(firstData.includes(";"))delim=";";
-  else if(firstData.includes(",")&&!/^-?\d+,\d+$/.test(firstData.trim()))delim=",";
-  else delim="SINGLE"; // single column
-
-  let hdr,rows;
-  if(delim==="SINGLE"){
-    // Single column: header on first line, values on subsequent lines
-    hdr=[lines[0].trim()];
-    rows=lines.slice(1).map(l=>({[hdr[0]]:l.trim()}));
-  } else {
-    hdr=lines[0].split(delim).map(h=>h.trim());
-    rows=lines.slice(1).map(l=>{
-      const parts=l.split(delim);
-      const o={};
-      hdr.forEach((h,i)=>o[h]=parts[i]?.trim());
-      return o;
-    });
-  }
+  const hdr=lines[0].split(/[,;\t]/).map(h=>h.trim());
+  const rows=lines.slice(1).map(l=>{const c=l.split(/[,;\t]/),o={};hdr.forEach((h,i)=>o[h]=c[i]?.trim());return o;});
   return{hdr,rows};
 }
 
@@ -381,7 +233,7 @@ function ApiKeyPage({onConnect}){
           </div>
           <div style={{textAlign:"left"}}>
             <div style={{fontSize:24,fontWeight:700,color:T.text,letterSpacing:-.5}}>PasienQuC</div>
-            <div style={{fontSize:10,color:T.textT,fontFamily:T.mono,letterSpacing:1}}>v.0.4.0 · LJ Chart · Westgard · Tren · Supabase</div>
+            <div style={{fontSize:10,color:T.textT,fontFamily:T.mono,letterSpacing:1}}>v.0.5.0 · LJ Chart · Westgard · Tren · Supabase</div>
           </div>
         </div>
         <div style={{fontSize:13,color:T.textS,maxWidth:480,lineHeight:1.7,margin:"0 auto"}}>
@@ -409,7 +261,7 @@ function ApiKeyPage({onConnect}){
         <div style={{marginTop:14,fontSize:10,color:T.textT,fontFamily:T.mono,textAlign:"center"}}>Data tersimpan di Supabase · aman & terenkripsi</div>
       </div>
       <div className="fu" style={{marginTop:18,fontSize:11,color:T.textT,fontFamily:T.mono,animationDelay:"160ms"}}>
-        Aplikasi dibuat oleh dr. WIY · PasienQuC v.0.4.0 · April 2026
+        Aplikasi dibuat oleh dr. WIY · PasienQuC v.0.5.0 · April 2026
       </div>
     </div>
   );
@@ -427,58 +279,26 @@ function GroupSel({selected,onChange}){
 }
 
 /* ══ LEVEY-JENNINGS CHART ══ */
-function LJChart({values, mean, sdVal, paramLabel, wardLabel, unit, violations, sigmaTier}){
+function LJChart({values, mean, sdVal, paramLabel, wardLabel, unit, violations}){
   const violSet=new Set(violations.map(v=>v.idx));
   const rejectSet=new Set(violations.filter(v=>v.rules.some(r=>r.type==="reject")).map(v=>v.idx));
 
-  // ── Zoom state ──
-  const[zoomLeft,setZoomLeft]=useState(null);
-  const[zoomRight,setZoomRight]=useState(null);
-  const[selecting,setSelecting]=useState(false);
-  const[xDomain,setXDomain]=useState([1,values.length]);
-  const[isZoomed,setIsZoomed]=useState(false);
-
-  // ── Auto Y domain: padding 0.5 SD beyond ±3SD, never goes below 0 for positive-only params ──
-  const yPad=sdVal*0.6;
-  const yMin=+(mean-3*sdVal-yPad).toFixed(3);
-  const yMax=+(mean+3*sdVal+yPad).toFixed(3);
-  const yDomain=[yMin,yMax];
-
-  const fullData=values.map((v,i)=>{
+  const data=values.map((v,i)=>{
     const z=(v-mean)/sdVal;
-    return{idx:i+1,value:+v.toFixed(3),z:+z.toFixed(2)};
+    return{idx:i+1,value:+v.toFixed(3),z:+z.toFixed(2),
+      p3sd:+(mean+3*sdVal).toFixed(3),p2sd:+(mean+2*sdVal).toFixed(3),p1sd:+(mean+1*sdVal).toFixed(3),
+      m3sd:+(mean-3*sdVal).toFixed(3),m2sd:+(mean-2*sdVal).toFixed(3),m1sd:+(mean-1*sdVal).toFixed(3),
+      mn:+mean.toFixed(3),
+      fill:rejectSet.has(i)?T.danger:violSet.has(i)?T.warn:T.ok,
+    };
   });
-
-  // Filtered data for zoom window
-  const data=fullData.filter(d=>d.idx>=xDomain[0]&&d.idx<=xDomain[1]);
-
-  const handleMouseDown=(e)=>{
-    if(!e?.activeLabel)return;
-    setZoomLeft(e.activeLabel);setSelecting(true);
-  };
-  const handleMouseMove=(e)=>{
-    if(!selecting||!e?.activeLabel)return;
-    setZoomRight(e.activeLabel);
-  };
-  const handleMouseUp=()=>{
-    if(!selecting){return;}
-    setSelecting(false);
-    if(zoomLeft!==null&&zoomRight!==null&&zoomLeft!==zoomRight){
-      const l=Math.min(zoomLeft,zoomRight);
-      const r=Math.max(zoomLeft,zoomRight);
-      if(r-l>=2){setXDomain([l,r]);setIsZoomed(true);}
-    }
-    setZoomLeft(null);setZoomRight(null);
-  };
-  const resetZoom=()=>{setXDomain([1,values.length]);setIsZoomed(false);setZoomLeft(null);setZoomRight(null);setSelecting(false);};
 
   const CustomDot=(props)=>{
     const{cx,cy,payload}=props;
     if(cx==null||cy==null)return null;
     const isViol=violSet.has(payload.idx-1);
     const isRej=rejectSet.has(payload.idx-1);
-    // Color based on sigma tier if available
-    const color=isRej?T.danger:isViol?T.warn:T.ok;
+    const color=isRej?T.danger:isViol?T.warn:T.blue;
     const r=isRej?6:isViol?5:3.5;
     return<circle cx={cx} cy={cy} r={r} fill={color} stroke="#fff" strokeWidth={1.5}/>;
   };
@@ -498,56 +318,36 @@ function LJChart({values, mean, sdVal, paramLabel, wardLabel, unit, violations, 
   };
 
   return(<div style={{...CS,padding:20}}>
-    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,flexWrap:"wrap",gap:8}}>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
       <div>
         <div style={{fontSize:13,fontWeight:600,color:T.text}}>Levey-Jennings Chart — {paramLabel}</div>
         <div style={{fontSize:10,color:T.textT,fontFamily:T.mono}}>{wardLabel} · n={values.length} · Mean={mean.toFixed(3)} · SD={sdVal.toFixed(3)}</div>
       </div>
-      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-        <span style={{fontSize:10,fontFamily:T.mono,color:T.ok}}>● Normal</span>
-        <span style={{fontSize:10,fontFamily:T.mono,color:T.warn}}>● Warning</span>
-        <span style={{fontSize:10,fontFamily:T.mono,color:T.danger}}>● Reject</span>
-        {isZoomed&&(
-          <button className="sb" onClick={resetZoom} style={{padding:"4px 10px",background:T.blueL,border:`1px solid ${T.blue}44`,borderRadius:7,color:T.blueD,fontSize:10,fontFamily:T.mono,cursor:"pointer",fontWeight:600}}>
-            ↩ Reset Zoom
-          </button>
-        )}
-        <span style={{fontSize:9,color:T.textT,fontFamily:T.mono}}>{isZoomed?`Titik ${xDomain[0]}–${xDomain[1]}`:"Drag untuk zoom"}</span>
+      <div style={{display:"flex",gap:8,alignItems:"center",fontSize:10,fontFamily:T.mono}}>
+        <span style={{color:T.ok}}>● Normal</span>
+        <span style={{color:T.warn}}>● Warning</span>
+        <span style={{color:T.danger}}>● Reject</span>
       </div>
     </div>
-    <ResponsiveContainer width="100%" height={320}>
-      <ComposedChart data={data} margin={{top:8,right:50,bottom:14,left:8}}
-        onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}
-        style={{cursor:selecting?"crosshair":"default"}}>
+    <ResponsiveContainer width="100%" height={300}>
+      <ComposedChart data={data} margin={{top:8,right:14,bottom:14,left:0}}>
         <CartesianGrid strokeDasharray="3 3" stroke="rgba(14,165,233,.07)"/>
-        <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border}
-          label={{value:"Urutan Pasien",position:"insideBottom",offset:-4,fill:T.textT,fontSize:9}}
-          domain={[xDomain[0],xDomain[1]]} type="number" allowDataOverflow/>
-        <YAxis tick={{fontSize:9,fill:T.textT}} stroke={T.border}
-          label={{value:unit,angle:-90,position:"insideLeft",fill:T.textT,fontSize:9,dx:-4}}
-          domain={yDomain} tickCount={8} allowDataOverflow/>
+        <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border} label={{value:"Urutan",position:"insideBottom",offset:-4,fill:T.textT,fontSize:9}}/>
+        <YAxis tick={{fontSize:9,fill:T.textT}} stroke={T.border} label={{value:unit,angle:-90,position:"insideLeft",fill:T.textT,fontSize:9}}/>
         <Tooltip content={<TT/>}/>
 
-        {/* SD reference lines with right-side labels */}
-        <ReferenceLine y={mean+3*sdVal} stroke={T.danger} strokeWidth={1.5} strokeDasharray="4 3" label={{value:"+3SD",fill:T.danger,fontSize:8,position:"right"}}/>
-        <ReferenceLine y={mean+2*sdVal} stroke={T.warn} strokeWidth={1.2} strokeDasharray="4 3" label={{value:"+2SD",fill:T.warn,fontSize:8,position:"right"}}/>
-        <ReferenceLine y={mean+sdVal} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3 3" label={{value:"+1SD",fill:T.textT,fontSize:8,position:"right"}}/>
-        <ReferenceLine y={mean} stroke={T.blue} strokeWidth={1.8} label={{value:"Mean",fill:T.blue,fontSize:8,position:"right"}}/>
-        <ReferenceLine y={mean-sdVal} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3 3" label={{value:"-1SD",fill:T.textT,fontSize:8,position:"right"}}/>
-        <ReferenceLine y={mean-2*sdVal} stroke={T.warn} strokeWidth={1.2} strokeDasharray="4 3" label={{value:"-2SD",fill:T.warn,fontSize:8,position:"right"}}/>
-        <ReferenceLine y={mean-3*sdVal} stroke={T.danger} strokeWidth={1.5} strokeDasharray="4 3" label={{value:"-3SD",fill:T.danger,fontSize:8,position:"right"}}/>
-
-        {/* Zoom selection highlight */}
-        {selecting&&zoomLeft!==null&&zoomRight!==null&&(
-          <ReferenceArea x1={zoomLeft} x2={zoomRight} strokeOpacity={0.3} fill={T.blue} fillOpacity={0.15}/>
-        )}
+        {/* SD zone fills via reference lines */}
+        <ReferenceLine y={mean+3*sdVal} stroke={T.danger} strokeWidth={1.5} strokeDasharray="4 3" label={{value:"+3SD",fill:T.danger,fontSize:8,position:"insideTopRight"}}/>
+        <ReferenceLine y={mean+2*sdVal} stroke={T.warn} strokeWidth={1.2} strokeDasharray="4 3" label={{value:"+2SD",fill:T.warn,fontSize:8,position:"insideTopRight"}}/>
+        <ReferenceLine y={mean+sdVal} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3 3" label={{value:"+1SD",fill:T.textT,fontSize:8,position:"insideTopRight"}}/>
+        <ReferenceLine y={mean} stroke={T.blue} strokeWidth={1.5} label={{value:"Mean",fill:T.blue,fontSize:8,position:"insideTopRight"}}/>
+        <ReferenceLine y={mean-sdVal} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3 3" label={{value:"-1SD",fill:T.textT,fontSize:8,position:"insideBottomRight"}}/>
+        <ReferenceLine y={mean-2*sdVal} stroke={T.warn} strokeWidth={1.2} strokeDasharray="4 3" label={{value:"-2SD",fill:T.warn,fontSize:8,position:"insideBottomRight"}}/>
+        <ReferenceLine y={mean-3*sdVal} stroke={T.danger} strokeWidth={1.5} strokeDasharray="4 3" label={{value:"-3SD",fill:T.danger,fontSize:8,position:"insideBottomRight"}}/>
 
         <Line dataKey="value" stroke={T.blue} strokeWidth={1.5} dot={<CustomDot/>} activeDot={false} name={paramLabel} connectNulls isAnimationActive={false}/>
       </ComposedChart>
     </ResponsiveContainer>
-    <div style={{fontSize:9,color:T.textT,fontFamily:T.mono,textAlign:"center",marginTop:4}}>
-      💡 Klik dan drag pada grafik untuk zoom in · Tombol "Reset Zoom" untuk kembali ke tampilan penuh
-    </div>
   </div>);
 }
 
@@ -876,794 +676,320 @@ function StatCard({label,value,unit,color,delay=0,warn=false}){
   </div>);
 }
 
-
-/* ══ PBRTQC CHART (with zoom) ══ */
-function PBRTQCChart({chartData,selMethods,limits,cfg,paramLabel,TT,yDomain,iqcPoints=[],activeTx}){
-  const[zoomLeft,setZoomLeft]=useState(null);
-  const[zoomRight,setZoomRight]=useState(null);
-  const[selecting,setSelecting]=useState(false);
-  const[xDomain,setXDomain]=useState(null);
-  const[isZoomed,setIsZoomed]=useState(false);
-
-  const displayData=xDomain?chartData.filter(d=>d.idx>=xDomain[0]&&d.idx<=xDomain[1]):chartData;
-
-  const handleMouseDown=(e)=>{if(!e?.activeLabel)return;setZoomLeft(e.activeLabel);setSelecting(true);};
-  const handleMouseMove=(e)=>{if(!selecting||!e?.activeLabel)return;setZoomRight(e.activeLabel);};
-  const handleMouseUp=()=>{
-    setSelecting(false);
-    if(zoomLeft!==null&&zoomRight!==null&&zoomLeft!==zoomRight){
-      const l=Math.min(zoomLeft,zoomRight),r=Math.max(zoomLeft,zoomRight);
-      if(r-l>=2){setXDomain([l,r]);setIsZoomed(true);}
-    }
-    setZoomLeft(null);setZoomRight(null);
-  };
-  const resetZoom=()=>{setXDomain(null);setIsZoomed(false);};
-
-  return(
-    <div style={{...CS,padding:18,marginBottom:14}}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,flexWrap:"wrap",gap:6}}>
-        <div style={{fontSize:13,fontWeight:600,color:T.text}}>PBRTQC Control Chart — {paramLabel}</div>
-        <div style={{display:"flex",gap:8,alignItems:"center"}}>
-          {isZoomed&&<button className="sb" onClick={resetZoom} style={{padding:"4px 10px",background:T.blueL,border:`1px solid ${T.blue}44`,borderRadius:7,color:T.blueD,fontSize:10,fontFamily:T.mono,cursor:"pointer",fontWeight:600}}>↩ Reset Zoom</button>}
-          <span style={{fontSize:9,color:T.textT,fontFamily:T.mono}}>{isZoomed?`Titik ${xDomain[0]}–${xDomain[1]}`:"Drag untuk zoom"}</span>
-        </div>
-      </div>
-      <ResponsiveContainer width="100%" height={280}>
-        <LineChart data={displayData} margin={{top:4,right:48,bottom:12,left:8}}
-          onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}
-          style={{cursor:selecting?"crosshair":"default"}}>
-          <CartesianGrid strokeDasharray="3 3" stroke="rgba(14,165,233,.07)"/>
-          <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border} type="number" allowDataOverflow domain={xDomain||["auto","auto"]}/>
-          <YAxis tick={{fontSize:9,fill:T.textT}} stroke={T.border}
-            label={{value:cfg.unit,angle:-90,position:"insideLeft",fill:T.textT,fontSize:9,dx:-4}}
-            domain={yDomain} allowDataOverflow tickCount={8}/>
-          <Tooltip content={<TT/>}/><Legend wrapperStyle={{fontSize:10,paddingTop:5}}/>
-          <Line dataKey="raw" stroke="rgba(14,165,233,.14)" dot={false} strokeWidth={1} name="Raw" legendType="none"/>
-          <ReferenceLine y={cfg.refHigh} stroke={T.textT} strokeDasharray="4 4" strokeOpacity={.4} label={{value:"Ref↑",fill:T.textT,fontSize:8,position:"right"}}/>
-          <ReferenceLine y={cfg.refLow} stroke={T.textT} strokeDasharray="4 4" strokeOpacity={.4} label={{value:"Ref↓",fill:T.textT,fontSize:8,position:"right"}}/>
-          {selMethods.map(m=>[
-            <Line key={m} dataKey={m} stroke={METHODS[m].color} dot={false} strokeWidth={2} name={METHODS[m].label} connectNulls strokeDasharray={METHODS[m].dash}/>,
-            <ReferenceLine key={m+"u"} y={limits[m].ucl} stroke={METHODS[m].color} strokeDasharray="2 5" strokeOpacity={.35} label={{value:`UCL`,fill:METHODS[m].color,fontSize:7,position:"right"}}/>,
-            <ReferenceLine key={m+"l"} y={limits[m].lcl} stroke={METHODS[m].color} strokeDasharray="2 5" strokeOpacity={.35} label={{value:`LCL`,fill:METHODS[m].color,fontSize:7,position:"right"}}/>,
-          ])}
-          {selecting&&zoomLeft!==null&&zoomRight!==null&&(
-            <ReferenceArea x1={zoomLeft} x2={zoomRight} fill={T.blue} fillOpacity={0.12} strokeOpacity={0.3}/>
-          )}
-          {/* IQC overlay points as reference lines with custom dots */}
-          {iqcPoints.filter(p=>p.idx>=((xDomain||[1])[0])&&p.idx<=(xDomain||[0,chartData.length])[1]).map((pt,i)=>(
-            <ReferenceLine key={"iqc"+i} x={pt.idx} stroke={pt.color} strokeWidth={1} strokeDasharray="2 4" strokeOpacity={0.7}
-              label={{value:"♦",fill:pt.color,fontSize:12,position:"top"}}/>
-          ))}
-        </LineChart>
-      </ResponsiveContainer>
-      <div style={{fontSize:9,color:T.textT,fontFamily:T.mono,textAlign:"center",marginTop:4}}>
-        💡 Klik dan drag untuk zoom in · Tombol "Reset Zoom" untuk kembali ke tampilan penuh
-      </div>
-      {/* IQC overlay legend */}
-      {iqcPoints&&iqcPoints.length>0&&(
-        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:8,padding:"6px 10px",background:T.surfB,borderRadius:8,fontSize:10,fontFamily:T.mono,color:T.textS}}>
-          <span style={{fontWeight:600,color:T.text}}>IQC Overlay:</span>
-          {[0,1,2].map(i=>{const pts=iqcPoints.filter(p=>p.level===i);if(!pts.length)return null;return<span key={i} style={{color:["#0ea5e9","#10b981","#f59e0b"][i]}}>♦ L{i+1} ({pts.length})</span>;})}
-          <span style={{color:T.danger}}>♦ Reject</span><span style={{color:T.warn}}>♦ Warning</span>
-          {activeTx&&activeTx!=="none"&&<span style={{color:T.blue,fontWeight:600}}>· {transformLabel(activeTx)}</span>}
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-/* ══ SIGMA CALCULATOR PANEL ══ */
-const SIGMA_STORAGE = "pasienquc_sigma_settings";
-
-function loadSigmaSettings() {
-  try { return JSON.parse(localStorage.getItem(SIGMA_STORAGE)) || {}; } catch { return {}; }
-}
-function saveSigmaSettings(key, val) {
-  try {
-    const s = loadSigmaSettings();
-    s[key] = val;
-    localStorage.setItem(SIGMA_STORAGE, JSON.stringify(s));
-  } catch {}
-}
-
-function SigmaPanel({ param, ward, cfg, stats, onSigmaChange, paramLabel }) {
-  const storageKey = `${param}_${ward}`;
-  const saved = loadSigmaSettings()[storageKey] || {};
-
-  const [tea,  setTea]  = useState(saved.tea  ?? cfg.tea  ?? 5.0);
-  const [bias, setBias] = useState(saved.bias ?? 0.5);
-  const [cvOverride, setCvOverride] = useState(saved.cvOverride ?? "");
-  const [expanded, setExpanded] = useState(true);
-
-  // CV: use override if set, else from data
-  const cvFromData = stats ? +stats.cv.toFixed(2) : null;
-  const cv = cvOverride !== "" ? parseFloat(cvOverride) : (cvFromData || 3.0);
-  const sigma = +((tea - Math.abs(bias)) / cv).toFixed(2);
-  const tier = getSigmaTier(sigma);
-
-  // Fire immediately on mount + whenever values change
-  useEffect(() => {
-    saveSigmaSettings(storageKey, { tea, bias, cvOverride });
-    onSigmaChange && onSigmaChange(sigma, tier);
-  }, [tea, bias, cvOverride, sigma, storageKey]);
-
-  const sliderRow = (label, val, set, min, max, step, hint) => (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
-        <span style={{ fontSize: 12, color: T.textS }}>{label}</span>
-        <span style={{ fontSize: 13, fontWeight: 700, color: T.blue, fontFamily: T.mono }}>{val.toFixed(2)}{hint}</span>
-      </div>
-      <input type="range" min={min} max={max} step={step} value={val}
-        onChange={e => set(+e.target.value)}
-        style={{ width: "100%", accentColor: T.blue, height: 4 }} />
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: T.textT, fontFamily: T.mono, marginTop: 2 }}>
-        <span>{min}{hint}</span><span>{max}{hint}</span>
-      </div>
-    </div>
-  );
-
-  return (
-    <div style={{ ...CS, padding: 0, overflow: "hidden", marginBottom: 16 }}>
-      {/* Header */}
-      <div onClick={() => setExpanded(!expanded)} style={{
-        padding: "14px 20px", cursor: "pointer",
-        background: `linear-gradient(135deg, ${tier.bg}, #fff)`,
-        borderBottom: expanded ? `1.5px solid ${tier.border}` : "none",
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        transition: "background 0.3s",
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ width: 42, height: 42, borderRadius: 12, background: tier.color, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <span style={{ fontSize: 20, fontWeight: 800, color: "#fff", fontFamily: T.mono }}>{tier.tier}</span>
-          </div>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: T.text }}>σ Sigma Metric & Six Sigma QC Design</div>
-            <div style={{ fontSize: 11, color: T.textS }}>{paramLabel || param} · {ward}</div>
-          </div>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          {/* Sigma badge */}
-          <div style={{ textAlign: "center", padding: "6px 16px", borderRadius: 10, background: tier.color + "18", border: `1.5px solid ${tier.color}44` }}>
-            <div style={{ fontSize: 22, fontWeight: 800, color: tier.color, fontFamily: T.mono, lineHeight: 1 }}>{sigma}σ</div>
-            <div style={{ fontSize: 10, fontWeight: 600, color: tier.color }}>{tier.label}</div>
-          </div>
-          <span style={{ fontSize: 16, color: T.textT }}>{expanded ? "▲" : "▼"}</span>
-        </div>
-      </div>
-
-      {expanded && (
-        <div style={{ padding: "20px 22px" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-            {/* Left: inputs */}
-            <div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: T.blueD, letterSpacing: 1.5, textTransform: "uppercase", fontFamily: T.mono, marginBottom: 14 }}>Parameter Input</div>
-
-              {sliderRow("TEa — Total Allowable Error (%)", tea, setTea, 0.5, 25, 0.1, "%")}
-              {sliderRow("Bias (%) — Inaccuracy", bias, setBias, 0, 15, 0.1, "%")}
-
-              {/* CV: auto from data or manual override */}
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                  <span style={{ fontSize: 12, color: T.textS }}>CV (%) — Imprecision</span>
-                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    {cvFromData !== null && (
-                      <button onClick={() => setCvOverride("")}
-                        style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, border: `1px solid ${cvOverride === "" ? T.blue : T.border}`, background: cvOverride === "" ? T.blueL : "transparent", color: cvOverride === "" ? T.blueD : T.textT, cursor: "pointer", fontFamily: T.mono }}>
-                        Auto ({cvFromData}%)
-                      </button>
-                    )}
-                    <span style={{ fontSize: 13, fontWeight: 700, color: T.blue, fontFamily: T.mono }}>{cv.toFixed(2)}%</span>
-                  </div>
-                </div>
-                <input type="number" min={0.1} max={30} step={0.01}
-                  value={cvOverride}
-                  onChange={e => setCvOverride(e.target.value)}
-                  placeholder={cvFromData ? `Auto: ${cvFromData}%` : "Masukkan CV%"}
-                  style={{ ...IS, fontSize: 12 }} />
-                <div style={{ fontSize: 10, color: T.textT, fontFamily: T.mono, marginTop: 3 }}>
-                  {cvOverride === "" && cvFromData ? "✅ CV dihitung otomatis dari data" : "✏️ CV diinput manual"}
-                </div>
-              </div>
-
-              {/* Formula display */}
-              <div style={{ background: tier.bg, border: `1.5px solid ${tier.border}`, borderRadius: 10, padding: "12px 14px" }}>
-                <div style={{ fontSize: 10, color: T.textT, fontFamily: T.mono, marginBottom: 6, letterSpacing: 1 }}>FORMULA SIGMA</div>
-                <div style={{ fontSize: 13, fontFamily: T.mono, color: T.text, lineHeight: 1.9 }}>
-                  σ = (TEa − |Bias|) / CV<br />
-                  σ = ({tea.toFixed(1)}% − {Math.abs(bias).toFixed(1)}%) / {cv.toFixed(2)}%<br />
-                  <span style={{ fontWeight: 800, color: tier.color, fontSize: 15 }}>σ = {sigma}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Right: sigma tier info */}
-            <div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: T.blueD, letterSpacing: 1.5, textTransform: "uppercase", fontFamily: T.mono, marginBottom: 14 }}>QC Strategy</div>
-
-              {/* Tier cards */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 7, marginBottom: 16 }}>
-                {[
-                  { range: "≥ 6σ", label: "World Class", color: "#059669", rules: "1₃s", levels: "2 level", freq: "1×/hari" },
-                  { range: "5–6σ", label: "Excellent",   color: "#0ea5e9", rules: "1₂s · 1₃s", levels: "2 level", freq: "1×/hari" },
-                  { range: "4–5σ", label: "Good",        color: "#2563eb", rules: "1₂s · 2₂s · R₄s", levels: "2 level", freq: "2×/hari" },
-                  { range: "3–4σ", label: "Marginal",    color: "#d97706", rules: "Semua rules", levels: "3 level", freq: "4×/hari" },
-                  { range: "< 3σ", label: "Poor",        color: "#dc2626", rules: "Semua rules", levels: "3 level", freq: "6×/hari" },
-                ].map(r => {
-                  const active = (
-                    (r.range === "≥ 6σ" && sigma >= 6) ||
-                    (r.range === "5–6σ" && sigma >= 5 && sigma < 6) ||
-                    (r.range === "4–5σ" && sigma >= 4 && sigma < 5) ||
-                    (r.range === "3–4σ" && sigma >= 3 && sigma < 4) ||
-                    (r.range === "< 3σ" && sigma < 3)
-                  );
-                  return (
-                    <div key={r.range} style={{
-                      padding: "10px 14px", borderRadius: 9,
-                      background: active ? r.color + "12" : T.surfB,
-                      border: `1.5px solid ${active ? r.color : T.border}`,
-                      display: "grid", gridTemplateColumns: "50px 1fr 80px 70px 60px",
-                      alignItems: "center", gap: 8, transition: "all 0.2s",
-                    }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: r.color, fontFamily: T.mono }}>{r.range}</div>
-                      <div style={{ fontSize: 11, fontWeight: active ? 700 : 400, color: active ? r.color : T.textS }}>{r.label}</div>
-                      <div style={{ fontSize: 10, color: T.textT, fontFamily: T.mono }}>{r.rules}</div>
-                      <div style={{ fontSize: 10, color: T.textT, fontFamily: T.mono }}>{r.levels}</div>
-                      <div style={{ fontSize: 10, color: T.textT, fontFamily: T.mono }}>{r.freq}</div>
-                      {active && <div style={{ gridColumn: "1/-1", fontSize: 11, color: r.color, marginTop: 3, fontWeight: 600 }}>
-                        ← Posisi saat ini · {tier.description}
-                      </div>}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Active rules indicator */}
-              <div style={{ background: T.surfB, borderRadius: 10, padding: "12px 14px", border: `1.5px solid ${T.border}` }}>
-                <div style={{ fontSize: 10, color: T.textT, fontFamily: T.mono, marginBottom: 8, letterSpacing: 1 }}>RULES AKTIF UNTUK σ = {sigma}</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                  {Object.entries(tier.activeRules).map(([rule, active]) => (
-                    <span key={rule} style={{
-                      padding: "3px 10px", borderRadius: 20, fontFamily: T.mono, fontSize: 11, fontWeight: 600,
-                      background: active ? tier.color + "18" : "#f1f5f9",
-                      color: active ? tier.color : T.textT,
-                      border: `1px solid ${active ? tier.color + "44" : T.border}`,
-                      textDecoration: active ? "none" : "line-through",
-                    }}>{rule}</span>
-                  ))}
-                </div>
-                <div style={{ fontSize: 10, color: T.textT, marginTop: 8, lineHeight: 1.6 }}>
-                  QC: <strong>{tier.qcLevels} level kontrol</strong> · <strong>{tier.qcFreq}</strong>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* TEa reference table */}
-          <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${T.border}` }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: T.text, marginBottom: 10 }}>Referensi TEa Standar (CLIA / Westgard)</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px,1fr))", gap: 6 }}>
-              {[
-                { param: "Hb", tea: 7.0, source: "CLIA" },
-                { param: "MCV", tea: 7.0, source: "CLIA" },
-                { param: "PLT", tea: 25.0, source: "CLIA" },
-                { param: "WBC", tea: 15.0, source: "CLIA" },
-                { param: "Na", tea: 4.0, source: "CLIA" },
-                { param: "K", tea: 8.6, source: "CLIA" },
-                { param: "Glukosa", tea: 10.0, source: "CLIA" },
-                { param: "Kreatinin", tea: 15.0, source: "CLIA" },
-                { param: "Albumin", tea: 10.0, source: "CLIA" },
-                { param: "PT", tea: 15.0, source: "Westgard" },
-                { param: "APTT", tea: 15.0, source: "Westgard" },
-                { param: "pH (AGD)", tea: 0.04, source: "CLIA" },
-                { param: "pCO2", tea: 8.0, source: "CLIA" },
-                { param: "CRP", tea: 25.0, source: "Westgard" },
-              ].map(r => (
-                <div key={r.param} style={{ display: "flex", justifyContent: "space-between", padding: "5px 10px", borderRadius: 7, background: r.param === param ? T.blueL : T.surfB, border: `1px solid ${r.param === param ? T.blue + "44" : T.border}`, fontSize: 11 }}>
-                  <span style={{ fontWeight: r.param === param ? 700 : 400, color: r.param === param ? T.blueD : T.text, fontFamily: T.mono }}>{r.param}</span>
-                  <span style={{ color: T.textS, fontFamily: T.mono }}>TEa {r.tea}%</span>
-                  <span style={{ color: T.textT, fontSize: 10 }}>{r.source}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-
 /* ══ IQC STORAGE ══ */
-const IQC_KEY = "pasienquc_iqc_data";
-function loadIQC(param, ward){ try{const d=JSON.parse(localStorage.getItem(IQC_KEY)||"{}"); return d[`${param}_${ward}`]||{levels:[]};} catch{return{levels:[]};} }
-function saveIQC(param, ward, data){ try{const d=JSON.parse(localStorage.getItem(IQC_KEY)||"{}"); d[`${param}_${ward}`]=data; localStorage.setItem(IQC_KEY,JSON.stringify(d));}catch{} }
-
-/* ══ TRANSFORMATION PANEL ══ */
-function TransformPanel({working, transform, setTransform, autoTx, setAutoTx, activeTx, rawSkew, txStats, paramLabel}){
-  const[expanded,setExpanded]=useState(false);
-  const txOptions=[
-    {key:"none",  label:"None",          icon:"—",  desc:"Tidak ada transformasi"},
-    {key:"log10", label:"Log₁₀",         icon:"㏒", desc:"Cocok untuk distribusi sangat right-skewed (CRP, PCT, Bilirubin, D-Dimer)"},
-    {key:"ln",    label:"Ln",            icon:"ℓ",  desc:"Natural log, alternatif Log₁₀"},
-    {key:"sqrt",  label:"√x",            icon:"√",  desc:"Square root, untuk count data (PLT, WBC)"},
-    {key:"inverse",label:"1/x",          icon:"⅟",  desc:"Inverse, untuk left-skewed"},
-    {key:"winsor", label:"Winsorization",icon:"✂",  desc:"Cap outlier ekstrem, data tidak dibuang"},
-    {key:"boxcox", label:"Box-Cox",      icon:"λ",  desc:"Auto-optimasi λ untuk normalitas terbaik"},
-  ];
-  const skewLabel=(s)=>s===null?"—":Math.abs(s)<0.5?"✅ Normal (|skew|<0.5)":Math.abs(s)<1?"⚠️ Mild skew":Math.abs(s)<2?"⚠️ Moderate skew":"❌ Severe skew (|skew|>2)";
-  const skewColor=(s)=>s===null?T.textT:Math.abs(s)<0.5?T.ok:Math.abs(s)<1?T.warn:T.danger;
-  const autoSuggestion=working?autoTransform(working):"none";
-
-  return(
-    <div style={{...CS,padding:0,overflow:"hidden",marginBottom:14}}>
-      <div onClick={()=>setExpanded(!expanded)} style={{padding:"12px 20px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",background:activeTx!=="none"?T.blueL:T.surfB}}>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <span style={{fontSize:18}}>⚗️</span>
-          <div>
-            <div style={{fontSize:13,fontWeight:600,color:T.text}}>Transformasi Data</div>
-            <div style={{fontSize:10,color:T.textT,fontFamily:T.mono}}>
-              {activeTx==="none"?"Tidak aktif":"Aktif: "+transformLabel(activeTx)} · Skewness raw: {rawSkew??".."} · {skewLabel(rawSkew)}
-            </div>
-          </div>
-        </div>
-        <div style={{display:"flex",gap:10,alignItems:"center"}}>
-          {activeTx!=="none"&&<span style={{fontSize:11,fontWeight:700,color:T.blueD,fontFamily:T.mono,padding:"3px 10px",background:T.blue+"18",borderRadius:20}}>{transformLabel(activeTx)} aktif</span>}
-          <span style={{fontSize:14,color:T.textT}}>{expanded?"▲":"▼"}</span>
-        </div>
-      </div>
-
-      {expanded&&<div style={{padding:"18px 22px"}}>
-        {/* Auto-detect toggle */}
-        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16,padding:"12px 16px",background:T.surfB,borderRadius:10,border:`1.5px solid ${T.border}`}}>
-          <div className="tog" onClick={()=>setAutoTx(!autoTx)} style={{width:40,height:22,borderRadius:11,background:autoTx?T.blue:"#cbd5e1",position:"relative",flexShrink:0}}>
-            <div style={{position:"absolute",top:3,left:autoTx?20:3,width:16,height:16,borderRadius:"50%",background:"#fff",transition:"left .2s"}}/>
-          </div>
-          <div>
-            <div style={{fontSize:12,fontWeight:600,color:T.text}}>Auto-detect transformasi optimal</div>
-            <div style={{fontSize:11,color:T.textS}}>
-              Berdasarkan skewness data → saran: <strong style={{color:T.blue}}>{transformLabel(autoSuggestion)}</strong>
-              {autoTx&&<span style={{color:T.ok,fontWeight:600}}> (aktif)</span>}
-            </div>
-          </div>
-        </div>
-
-        {/* Skewness info */}
-        {working&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
-          <div style={{background:T.surfB,borderRadius:9,padding:"10px 14px",border:`1px solid ${T.border}`}}>
-            <div style={{fontSize:10,color:T.textT,fontFamily:T.mono,marginBottom:4,letterSpacing:1}}>SKEWNESS RAW</div>
-            <div style={{fontSize:18,fontWeight:700,color:skewColor(rawSkew),fontFamily:T.mono}}>{rawSkew??".."}</div>
-            <div style={{fontSize:10,color:skewColor(rawSkew)}}>{skewLabel(rawSkew)}</div>
-          </div>
-          {activeTx!=="none"&&txStats&&<div style={{background:"#ecfdf5",borderRadius:9,padding:"10px 14px",border:`1px solid ${T.ok}44`}}>
-            <div style={{fontSize:10,color:T.textT,fontFamily:T.mono,marginBottom:4,letterSpacing:1}}>SETELAH TRANSFORMASI</div>
-            <div style={{fontSize:14,fontWeight:700,color:T.ok,fontFamily:T.mono}}>CV: {txStats.cv.toFixed(2)}%</div>
-            <div style={{fontSize:10,color:T.textS}}>Mean: {txStats.mean.toFixed(3)} · SD: {txStats.sd.toFixed(3)}</div>
-          </div>}
-        </div>}
-
-        {/* Method selector */}
-        <div style={{fontSize:11,fontWeight:600,color:T.text,marginBottom:10}}>Pilih Metode Transformasi</div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:8}}>
-          {txOptions.map(t=>{
-            const active=activeTx===t.key&&!autoTx;
-            return(
-              <div key={t.key} className="ch" onClick={()=>{setAutoTx(false);setTransform(t.key);}} style={{
-                padding:"10px 12px",borderRadius:10,cursor:"pointer",
-                background:active?"#eff6ff":T.surfB,
-                border:`1.5px solid ${active?T.blue:T.border}`,
-                transition:"all .15s",
-              }}>
-                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-                  <span style={{fontSize:16,fontFamily:T.mono,color:active?T.blue:T.textT}}>{t.icon}</span>
-                  <span style={{fontSize:13,fontWeight:active?700:500,color:active?T.blueD:T.text,fontFamily:T.mono}}>{t.label}</span>
-                  {autoSuggestion===t.key&&<span style={{fontSize:9,padding:"1px 6px",background:T.ok+"18",color:T.ok,borderRadius:10,fontWeight:600}}>Saran</span>}
-                </div>
-                <div style={{fontSize:10,color:T.textS,lineHeight:1.4}}>{t.desc}</div>
-              </div>
-            );
-          })}
-        </div>
-        <div style={{marginTop:12,fontSize:10,color:T.textT,fontFamily:T.mono}}>
-          ⚠️ Transformasi mengubah skala data. Nilai pada grafik akan dalam satuan transformed. LJ Chart & PBRTQC Chart menggunakan data yang sudah ditransformasi.
-        </div>
-      </div>}
-    </div>
-  );
-}
-
-/* ══ IQC PANEL ══ */
+const IQC_KEY="pasienquc_iqc_data";
 const IQC_LEVEL_COLORS=["#0ea5e9","#10b981","#f59e0b"];
 const IQC_LEVEL_NAMES=["Level 1 (Low)","Level 2 (Normal)","Level 3 (High)"];
+const SIGMA_STORAGE="pasienquc_sigma_settings";
+function loadIQC(param,ward){try{const d=JSON.parse(localStorage.getItem(IQC_KEY)||"{}");return d[param+"_"+ward]||{levels:[{},{},{}]};}catch{return{levels:[{},{},{}]};}}
+function saveIQC(param,ward,data){try{const d=JSON.parse(localStorage.getItem(IQC_KEY)||"{}");d[param+"_"+ward]=data;localStorage.setItem(IQC_KEY,JSON.stringify(d));}catch{}}
+function loadSigmaSettings(){try{return JSON.parse(localStorage.getItem(SIGMA_STORAGE)||"{}");}catch{return{};}}
+function saveSigmaSettings(key,val){try{const s=loadSigmaSettings();s[key]=val;localStorage.setItem(SIGMA_STORAGE,JSON.stringify(s));}catch{}}
 
-function IQCPanel({param, ward, wardLabel, paramLabel, cfg, sigmaTierCurrent, apiKey}){
-  const[iqcData,setIqcData]=useState(()=>loadIQC(param,ward));
-  const[activeLevel,setActiveLevel]=useState(0);
-  const[inputVal,setInputVal]=useState("");
-  const[showSetup,setShowSetup]=useState(false);
-  const[setupForm,setSetupForm]=useState({target:"",sd:"",name:""});
-  const[showOverlay,setShowOverlay]=useState(true);
-
-  useEffect(()=>{ saveIQC(param,ward,iqcData); },[iqcData,param,ward]);
-  useEffect(()=>{ setIqcData(loadIQC(param,ward)); },[param,ward]);
-
-  const level=iqcData.levels?.[activeLevel];
-  const addResult=()=>{
-    const v=parseNum(inputVal);
-    if(isNaN(v))return alert("Nilai tidak valid.");
-    setIqcData(prev=>{
-      const lvls=[...(prev.levels||[{},{},{}])];
-      if(!lvls[activeLevel])lvls[activeLevel]={};
-      lvls[activeLevel]={...lvls[activeLevel],results:[...(lvls[activeLevel].results||[]),{v,t:new Date().toISOString()}]};
-      return{...prev,levels:lvls};
-    });
-    setInputVal("");
-  };
-
-  const setupLevel=()=>{
-    const target=parseNum(setupForm.target),sdVal=parseNum(setupForm.sd);
-    if(isNaN(target)||isNaN(sdVal)||sdVal<=0)return alert("Target dan SD harus angka valid.");
-    setIqcData(prev=>{
-      const lvls=[...(prev.levels||[{},{},{}])];
-      if(!lvls[activeLevel])lvls[activeLevel]={};
-      lvls[activeLevel]={...lvls[activeLevel],target,sd:sdVal,name:setupForm.name||IQC_LEVEL_NAMES[activeLevel]};
-      return{...prev,levels:lvls};
-    });
-    setShowSetup(false);
-  };
-
-  const clearLevel=()=>{
-    if(!window.confirm("Hapus semua hasil kontrol level ini?"))return;
-    setIqcData(prev=>{
-      const lvls=[...(prev.levels||[])];
-      if(lvls[activeLevel])lvls[activeLevel]={...lvls[activeLevel],results:[]};
-      return{...prev,levels:lvls};
-    });
-  };
-
-  // Build IQC chart data per level
-  const buildIQCChart=(lv)=>{
-    if(!lv?.target||!lv?.sd||!lv?.results?.length)return[];
-    return lv.results.map((r,i)=>{
-      const z=(r.v-lv.target)/lv.sd;
-      return{idx:i+1,value:+r.v.toFixed(3),z:+z.toFixed(2),time:new Date(r.t).toLocaleDateString("id-ID")};
-    });
-  };
-
-  // Westgard check on IQC data
-  const iqcViolations=(lv)=>{
-    if(!lv?.target||!lv?.sd||!lv?.results?.length||lv.sd<=0)return[];
-    const vals=lv.results.map(r=>r.v).filter(v=>!isNaN(v));
-    if(!vals.length)return[];
-    return checkWestgard(vals,lv.target,lv.sd,sigmaTierCurrent);
-  };
-
-  // IQC Chart tooltip
-  const IQCTT=({active,payload,label})=>{
-    if(!active||!payload?.length)return null;
-    const p=payload[0]?.payload;
-    return(<div style={{background:T.surface,border:`1.5px solid ${T.borderM}`,borderRadius:8,padding:"9px 12px",fontFamily:T.mono,fontSize:10}}>
-      <div style={{color:T.textS,marginBottom:3}}>Run #{label} · {p?.time}</div>
-      <div style={{color:T.text,fontWeight:600}}>{p?.value} {cfg.unit}</div>
-      <div style={{color:T.textT}}>z = {p?.z}</div>
-    </div>);
-  };
-
-  return(
-    <div style={{...CS,padding:0,overflow:"hidden",marginBottom:14}}>
-      {/* Header */}
-      <div style={{padding:"12px 20px",background:"linear-gradient(135deg,#f0fdf4,#ecfdf5)",borderBottom:`1.5px solid #6ee7b744`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <span style={{fontSize:18}}>🧪</span>
-          <div>
-            <div style={{fontSize:13,fontWeight:700,color:T.text}}>QC Internal (IQC) — {paramLabel}</div>
-            <div style={{fontSize:10,color:T.textT,fontFamily:T.mono}}>{wardLabel} · Material kontrol per run</div>
-          </div>
-        </div>
-        <div style={{display:"flex",gap:7,alignItems:"center"}}>
-          <div style={{fontSize:10,color:T.textT,fontFamily:T.mono}}>
-            Overlay di PBRTQC:
-          </div>
-          <div className="tog" onClick={()=>setShowOverlay(!showOverlay)} style={{width:36,height:20,borderRadius:10,background:showOverlay?T.ok:"#cbd5e1",position:"relative"}}>
-            <div style={{position:"absolute",top:2,left:showOverlay?17:2,width:16,height:16,borderRadius:"50%",background:"#fff",transition:"left .2s"}}/>
-          </div>
-        </div>
-      </div>
-
-      <div style={{padding:"18px 22px"}}>
-        {/* Level tabs */}
-        <div style={{display:"flex",gap:8,marginBottom:16}}>
-          {[0,1,2].map(i=>{
-            const lv=iqcData.levels?.[i];
-            const viol=iqcViolations(lv);
-            const rej=viol.filter(v=>v.rules.some(r=>r.type==="reject")).length;
-            return(
-              <button key={i} onClick={()=>setActiveLevel(i)} style={{
-                padding:"8px 16px",borderRadius:9,border:`1.5px solid ${activeLevel===i?IQC_LEVEL_COLORS[i]:T.border}`,
-                background:activeLevel===i?IQC_LEVEL_COLORS[i]+"14":"transparent",
-                color:activeLevel===i?IQC_LEVEL_COLORS[i]:T.textS,
-                fontSize:12,fontWeight:activeLevel===i?700:400,cursor:"pointer",
-                display:"flex",alignItems:"center",gap:7,
-              }}>
-                <span>{lv?.name||IQC_LEVEL_NAMES[i]}</span>
-                {lv?.results?.length>0&&<span style={{fontSize:10,fontFamily:T.mono,color:T.textT}}>n={lv.results.length}</span>}
-                {rej>0&&<span style={{fontSize:10,fontFamily:T.mono,color:T.danger,fontWeight:700}}>⚠{rej}</span>}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Level setup / content */}
-        {!level?.target?(
-          <div style={{textAlign:"center",padding:"24px 20px",background:T.surfB,borderRadius:10,border:`1.5px dashed ${T.border}`}}>
-            <div style={{fontSize:13,color:T.textS,marginBottom:12}}>Atur nilai target dan SD untuk {IQC_LEVEL_NAMES[activeLevel]}</div>
-            <button className="pb" onClick={()=>{setSetupForm({target:"",sd:"",name:""});setShowSetup(true);}} style={{...BP,padding:"8px 20px",fontSize:12}}>
-              + Setup Level {activeLevel+1}
-            </button>
-          </div>
-        ):(
-          <div>
-            {/* Level info bar */}
-            <div style={{display:"flex",gap:12,alignItems:"center",marginBottom:14,padding:"10px 14px",background:IQC_LEVEL_COLORS[activeLevel]+"0d",borderRadius:9,border:`1px solid ${IQC_LEVEL_COLORS[activeLevel]}33`}}>
-              <div style={{flex:1,display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
-                {[
-                  ["Target",level.target.toFixed?level.target.toFixed(3):level.target,cfg.unit],
-                  ["SD",level.sd.toFixed?level.sd.toFixed(3):level.sd,""],
-                  ["CV%",(level.sd&&level.target&&level.target!==0)?(level.sd/level.target*100).toFixed(2)+"%":"—",""],
-                  ["N runs",level.results?.length||0,"hasil"],
-                ].map(([l,v,u])=>(
-                  <div key={l} style={{textAlign:"center"}}>
-                    <div style={{fontSize:9,color:T.textT,fontFamily:T.mono,letterSpacing:1}}>{l}</div>
-                    <div style={{fontSize:14,fontWeight:700,color:T.text,fontFamily:T.mono}}>{v}</div>
-                    <div style={{fontSize:9,color:T.textT,fontFamily:T.mono}}>{u}</div>
-                  </div>
-                ))}
-              </div>
-              <div style={{display:"flex",gap:6}}>
-                <button className="sb" onClick={()=>{setSetupForm({target:level.target,sd:level.sd,name:level.name||""});setShowSetup(true);}} style={{...BS,padding:"5px 11px",fontSize:11}}>✏️</button>
-                <button className="sb" onClick={clearLevel} style={{...BS,padding:"5px 11px",fontSize:11,color:T.danger,borderColor:`${T.danger}44`}}>🗑</button>
-              </div>
-            </div>
-
-            {/* Input new result */}
-            <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}>
-              <input value={inputVal} onChange={e=>setInputVal(e.target.value)}
-                onKeyDown={e=>e.key==="Enter"&&addResult()}
-                placeholder={"Hasil kontrol "+cfg.unit} style={{...IS,width:180,fontSize:13}}/>
-              <button className="pb" onClick={addResult} disabled={!inputVal.trim()} style={{...BP,padding:"8px 16px",fontSize:12}}>+ Tambah Hasil</button>
-              <div style={{fontSize:11,color:T.textT,fontFamily:T.mono}}>Tekan Enter untuk tambah cepat</div>
-            </div>
-
-            {/* IQC Chart */}
-            {level.results?.length>=2&&(()=>{
-              const chartData=buildIQCChart(level);
-              const viols=iqcViolations(level);
-              const violSet=new Set(viols.map(v=>v.idx));
-              const rejSet=new Set(viols.filter(v=>v.rules.some(r=>r.type==="reject")).map(v=>v.idx));
-
-              const CustomDot=(props)=>{
-                const{cx,cy,payload}=props;
-                if(cx==null||cy==null)return null;
-                const idx=payload.idx-1;
-                const color=rejSet.has(idx)?T.danger:violSet.has(idx)?T.warn:IQC_LEVEL_COLORS[activeLevel];
-                return<circle cx={cx} cy={cy} r={rejSet.has(idx)?6:violSet.has(idx)?5:4} fill={color} stroke="#fff" strokeWidth={1.5}/>;
-              };
-
-              const yPad=level.sd*0.8;
-              const yDom=[+(level.target-3.5*level.sd-yPad).toFixed(3),+(level.target+3.5*level.sd+yPad).toFixed(3)];
-
-              return(
-                <div style={{marginBottom:14}}>
-                  <div style={{fontSize:11,fontWeight:600,color:T.text,marginBottom:8}}>
-                    LJ Chart IQC — {level.name||IQC_LEVEL_NAMES[activeLevel]}
-                    {viols.length>0&&<span style={{color:T.danger,fontFamily:T.mono,marginLeft:10}}>⚠ {viols.filter(v=>v.rules.some(r=>r.type==="reject")).length} reject · {viols.filter(v=>v.rules.every(r=>r.type==="warning")).length} warning</span>}
-                  </div>
-                  <ResponsiveContainer width="100%" height={240}>
-                    <ComposedChart data={chartData} margin={{top:4,right:48,bottom:12,left:8}}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(14,165,233,.07)"/>
-                      <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border}/>
-                      <YAxis tick={{fontSize:9,fill:T.textT}} stroke={T.border} domain={yDom} label={{value:cfg.unit,angle:-90,position:"insideLeft",fill:T.textT,fontSize:9,dx:-4}}/>
-                      <Tooltip content={<IQCTT/>}/>
-                      <ReferenceLine y={level.target+3*level.sd} stroke={T.danger} strokeDasharray="4 3" label={{value:"+3SD",fill:T.danger,fontSize:8,position:"right"}}/>
-                      <ReferenceLine y={level.target+2*level.sd} stroke={T.warn} strokeDasharray="4 3" label={{value:"+2SD",fill:T.warn,fontSize:8,position:"right"}}/>
-                      <ReferenceLine y={level.target+level.sd} stroke="#94a3b8" strokeDasharray="3 3" label={{value:"+1SD",fill:T.textT,fontSize:8,position:"right"}}/>
-                      <ReferenceLine y={level.target} stroke={IQC_LEVEL_COLORS[activeLevel]} strokeWidth={2} label={{value:"Target",fill:IQC_LEVEL_COLORS[activeLevel],fontSize:8,position:"right"}}/>
-                      <ReferenceLine y={level.target-level.sd} stroke="#94a3b8" strokeDasharray="3 3" label={{value:"-1SD",fill:T.textT,fontSize:8,position:"right"}}/>
-                      <ReferenceLine y={level.target-2*level.sd} stroke={T.warn} strokeDasharray="4 3" label={{value:"-2SD",fill:T.warn,fontSize:8,position:"right"}}/>
-                      <ReferenceLine y={level.target-3*level.sd} stroke={T.danger} strokeDasharray="4 3" label={{value:"-3SD",fill:T.danger,fontSize:8,position:"right"}}/>
-                      <Line dataKey="value" stroke={IQC_LEVEL_COLORS[activeLevel]} strokeWidth={1.5} dot={<CustomDot/>} activeDot={false} connectNulls isAnimationActive={false}/>
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-              );
-            })()}
-
-            {/* Violation summary */}
-            {level.results?.length>=2&&(()=>{
-              const viols=iqcViolations(level);
-              if(viols.length===0)return(
-                <div style={{padding:"10px 14px",background:"#ecfdf5",borderRadius:8,border:`1px solid ${T.ok}44`,fontSize:12,color:T.ok,fontWeight:600}}>
-                  ✅ Tidak ada pelanggaran Westgard
-                </div>
-              );
-              const ruleCount={};
-              viols.forEach(v=>v.rules.forEach(r=>{ruleCount[r.rule]=(ruleCount[r.rule]||0)+1;}));
-              return(
-                <div style={{padding:"10px 14px",background:"#fef2f2",borderRadius:8,border:`1px solid ${T.danger}44`,fontSize:12}}>
-                  <div style={{fontWeight:700,color:T.danger,marginBottom:6}}>⚠ Westgard Violations IQC</div>
-                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                    {Object.entries(ruleCount).map(([rule,n])=>(
-                      <span key={rule} style={{padding:"2px 10px",borderRadius:10,background:T.danger+"18",color:T.danger,fontFamily:T.mono,fontWeight:700,fontSize:11}}>{rule}: {n}×</span>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
-        )}
-      </div>
-
-      {/* Setup modal */}
-      {showSetup&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",zIndex:999,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setShowSetup(false)}>
-          <div style={{background:T.surface,borderRadius:16,padding:28,width:380,boxShadow:"0 20px 60px rgba(0,0,0,.15)"}} onClick={e=>e.stopPropagation()}>
-            <div style={{fontSize:14,fontWeight:700,color:T.text,marginBottom:18}}>Setup {IQC_LEVEL_NAMES[activeLevel]}</div>
-            {[
-              {l:"Nama Level",k:"name",ph:"Contoh: Kontrol Normal"},
-              {l:"Target / Mean ("+cfg.unit+")",k:"target",ph:"Nilai target dari insert kit"},
-              {l:"SD ("+cfg.unit+")",k:"sd",ph:"SD dari insert kit atau perhitungan lab"},
-            ].map(f=>(
-              <div key={f.k} style={{marginBottom:14}}>
-                <div style={LS}>{f.l}</div>
-                <input value={setupForm[f.k]} onChange={e=>setSetupForm(p=>({...p,[f.k]:e.target.value}))} placeholder={f.ph} style={IS}/>
-              </div>
-            ))}
-            <div style={{display:"flex",gap:10,marginTop:4}}>
-              <button className="pb" onClick={setupLevel} style={{...BP,flex:1}}>💾 Simpan</button>
-              <button className="sb" onClick={()=>setShowSetup(false)} style={{...BS,flex:1}}>Batal</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ══ IQC OVERLAY DATA (for PBRTQC chart) ══ */
-function getIQCOverlayPoints(param, ward){
-  const d=loadIQC(param,ward);
-  const pts=[];
+function getIQCOverlayPoints(param,ward){
+  const d=loadIQC(param,ward),pts=[];
   (d.levels||[]).forEach((lv,li)=>{
-    if(!lv?.results?.length||!lv?.target)return;
+    if(!lv?.results?.length||!lv?.target||!lv?.sd)return;
     lv.results.forEach((r,i)=>{
       const z=(r.v-lv.target)/lv.sd;
-      const reject=Math.abs(z)>3;
-      pts.push({idx:i+1,value:r.v,level:li,color:reject?T.danger:Math.abs(z)>2?T.warn:IQC_LEVEL_COLORS[li],reject,label:"IQC L"+(li+1)});
+      pts.push({idx:i+1,value:r.v,level:li,color:Math.abs(z)>3?T.danger:Math.abs(z)>2?T.warn:IQC_LEVEL_COLORS[li],reject:Math.abs(z)>3});
     });
   });
   return pts;
 }
 
+/* ══ IQC PANEL ══ */
+function IQCPanel({param,ward,wardLabel,paramLabel,cfg,sigmaTierCurrent}){
+  const[iqcData,setIqcData]=useState(()=>loadIQC(param,ward));
+  const[activeLevel,setActiveLevel]=useState(0);
+  const[inputVal,setInputVal]=useState("");
+  const[showSetup,setShowSetup]=useState(false);
+  const[setupForm,setSetupForm]=useState({target:"",sd:"",name:""});
+  useEffect(()=>{saveIQC(param,ward,iqcData);},[iqcData,param,ward]);
+  useEffect(()=>{setIqcData(loadIQC(param,ward));},[param,ward]);
+  const levels=iqcData.levels||[{},{},{}];
+  const level=levels[activeLevel]||{};
+  const addResult=()=>{const v=parseNum(inputVal);if(isNaN(v))return alert("Nilai tidak valid.");setIqcData(prev=>{const lvls=[...(prev.levels||[{},{},{}])];if(!lvls[activeLevel])lvls[activeLevel]={};lvls[activeLevel]={...lvls[activeLevel],results:[...(lvls[activeLevel].results||[]),{v,t:new Date().toISOString()}]};return{...prev,levels:lvls};});setInputVal("");};
+  const setupLevel=()=>{const target=parseNum(setupForm.target),sdVal=parseNum(setupForm.sd);if(isNaN(target)||isNaN(sdVal)||sdVal<=0)return alert("Target dan SD harus angka valid.");setIqcData(prev=>{const lvls=[...(prev.levels||[{},{},{}])];if(!lvls[activeLevel])lvls[activeLevel]={};lvls[activeLevel]={...lvls[activeLevel],target,sd:sdVal,name:setupForm.name||IQC_LEVEL_NAMES[activeLevel]};return{...prev,levels:lvls};});setShowSetup(false);};
+  const clearLevel=()=>{if(!window.confirm("Hapus semua hasil kontrol level ini?"))return;setIqcData(prev=>{const lvls=[...(prev.levels||[])];if(lvls[activeLevel])lvls[activeLevel]={...lvls[activeLevel],results:[]};return{...prev,levels:lvls};});};
+  const getIQCViols=(lv)=>{if(!lv?.target||!lv?.sd||lv.sd<=0||!lv?.results?.length)return[];const vals=safeArr(lv.results.map(r=>r.v));if(!vals.length)return[];return checkWestgard(vals,lv.target,lv.sd,sigmaTierCurrent);};
+  const IQCTooltip=({active,payload,label})=>{if(!active||!payload?.length)return null;const p=payload[0]?.payload;return(<div style={{background:T.surface,border:`1.5px solid ${T.borderM}`,borderRadius:8,padding:"9px 12px",fontFamily:T.mono,fontSize:10}}><div style={{color:T.textS,marginBottom:3}}>Run #{label}</div><div style={{color:T.text,fontWeight:600}}>{p?.value} {cfg.unit}</div><div style={{color:T.textT}}>z = {p?.z}</div></div>);};
+  const renderChart=(lv,li)=>{
+    if(!lv?.target||!lv?.sd||!lv?.results||lv.results.length<2)return null;
+    const chartData=lv.results.map((r,i)=>({idx:i+1,value:+r.v.toFixed(3),z:+((r.v-lv.target)/lv.sd).toFixed(2)}));
+    const viols=getIQCViols(lv);
+    const violSet=new Set(viols.map(v=>v.idx));
+    const rejSet=new Set(viols.filter(v=>v.rules.some(r=>r.type==="reject")).map(v=>v.idx));
+    const lvColor=IQC_LEVEL_COLORS[li];
+    const yDom=[+(lv.target-4*lv.sd).toFixed(3),+(lv.target+4*lv.sd).toFixed(3)];
+    const Dot=(props)=>{const{cx,cy,payload}=props;if(cx==null||cy==null)return null;const idx=payload.idx-1;const color=rejSet.has(idx)?T.danger:violSet.has(idx)?T.warn:lvColor;return<circle cx={cx} cy={cy} r={rejSet.has(idx)?6:violSet.has(idx)?5:4} fill={color} stroke="#fff" strokeWidth={1.5}/>;};
+    return(<div style={{marginBottom:12}}>
+      <div style={{fontSize:11,fontWeight:600,color:T.text,marginBottom:7}}>LJ Chart — {lv.name||IQC_LEVEL_NAMES[li]}{viols.filter(v=>v.rules.some(r=>r.type==="reject")).length>0&&<span style={{color:T.danger,fontFamily:T.mono,marginLeft:8}}>⚠ {viols.filter(v=>v.rules.some(r=>r.type==="reject")).length} reject</span>}</div>
+      <ResponsiveContainer width="100%" height={200}>
+        <ComposedChart data={chartData} margin={{top:4,right:48,bottom:8,left:4}}>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(14,165,233,.07)"/>
+          <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border}/>
+          <YAxis tick={{fontSize:9,fill:T.textT}} stroke={T.border} domain={yDom} label={{value:cfg.unit,angle:-90,position:"insideLeft",fill:T.textT,fontSize:9,dx:-4}}/>
+          <Tooltip content={<IQCTooltip/>}/>
+          <ReferenceLine y={lv.target+3*lv.sd} stroke={T.danger} strokeDasharray="4 3" label={{value:"+3SD",fill:T.danger,fontSize:8,position:"right"}}/>
+          <ReferenceLine y={lv.target+2*lv.sd} stroke={T.warn} strokeDasharray="4 3" label={{value:"+2SD",fill:T.warn,fontSize:8,position:"right"}}/>
+          <ReferenceLine y={lv.target+lv.sd} stroke="#94a3b8" strokeDasharray="3 3" label={{value:"+1SD",fill:T.textT,fontSize:8,position:"right"}}/>
+          <ReferenceLine y={lv.target} stroke={lvColor} strokeWidth={2} label={{value:"Target",fill:lvColor,fontSize:8,position:"right"}}/>
+          <ReferenceLine y={lv.target-lv.sd} stroke="#94a3b8" strokeDasharray="3 3" label={{value:"-1SD",fill:T.textT,fontSize:8,position:"right"}}/>
+          <ReferenceLine y={lv.target-2*lv.sd} stroke={T.warn} strokeDasharray="4 3" label={{value:"-2SD",fill:T.warn,fontSize:8,position:"right"}}/>
+          <ReferenceLine y={lv.target-3*lv.sd} stroke={T.danger} strokeDasharray="4 3" label={{value:"-3SD",fill:T.danger,fontSize:8,position:"right"}}/>
+          <Line dataKey="value" stroke={lvColor} strokeWidth={1.5} dot={<Dot/>} activeDot={false} connectNulls isAnimationActive={false}/>
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>);
+  };
+  const renderViolSummary=(lv)=>{const viols=getIQCViols(lv);if(!viols.length)return(<div style={{padding:"8px 13px",background:"#ecfdf5",borderRadius:8,border:`1px solid ${T.ok}44`,fontSize:12,color:T.ok,fontWeight:600}}>✅ Tidak ada pelanggaran Westgard</div>);const rc={};viols.forEach(v=>v.rules.forEach(r=>{rc[r.rule]=(rc[r.rule]||0)+1;}));return(<div style={{padding:"8px 13px",background:"#fef2f2",borderRadius:8,border:`1px solid ${T.danger}44`,fontSize:12}}><div style={{fontWeight:700,color:T.danger,marginBottom:5}}>⚠ Westgard Violations IQC</div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{Object.entries(rc).map(([rule,n])=><span key={rule} style={{padding:"2px 9px",borderRadius:10,background:T.danger+"18",color:T.danger,fontFamily:T.mono,fontWeight:700,fontSize:11}}>{rule}: {n}×</span>)}</div></div>);};
+  return(<div style={{...CS,padding:0,overflow:"hidden",marginBottom:14}}>
+    <div style={{padding:"11px 18px",background:"linear-gradient(135deg,#f0fdf4,#ecfdf5)",borderBottom:`1.5px solid #6ee7b744`,display:"flex",alignItems:"center",gap:9}}>
+      <span style={{fontSize:16}}>🧪</span>
+      <div><div style={{fontSize:12,fontWeight:700,color:T.text}}>QC Internal (IQC) — {paramLabel}</div><div style={{fontSize:9,color:T.textT,fontFamily:T.mono}}>{wardLabel} · Material kontrol per run</div></div>
+    </div>
+    <div style={{padding:"14px 18px"}}>
+      <div style={{display:"flex",gap:6,marginBottom:12}}>
+        {[0,1,2].map(i=>{const lv=levels[i]||{};const rej=getIQCViols(lv).filter(v=>v.rules.some(r=>r.type==="reject")).length;return(<button key={i} onClick={()=>setActiveLevel(i)} style={{padding:"6px 12px",borderRadius:8,border:`1.5px solid ${activeLevel===i?IQC_LEVEL_COLORS[i]:T.border}`,background:activeLevel===i?IQC_LEVEL_COLORS[i]+"14":"transparent",color:activeLevel===i?IQC_LEVEL_COLORS[i]:T.textS,fontSize:11,fontWeight:activeLevel===i?700:400,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}><span>{lv.name||IQC_LEVEL_NAMES[i]}</span>{lv.results?.length>0&&<span style={{fontSize:9,fontFamily:T.mono,color:T.textT}}>n={lv.results.length}</span>}{rej>0&&<span style={{fontSize:9,color:T.danger,fontWeight:700}}>⚠{rej}</span>}</button>);})}
+      </div>
+      {!level.target?(<div style={{textAlign:"center",padding:"18px",background:T.surfB,borderRadius:9,border:`1.5px dashed ${T.border}`}}><div style={{fontSize:12,color:T.textS,marginBottom:9}}>Atur nilai target dan SD untuk {IQC_LEVEL_NAMES[activeLevel]}</div><button className="pb" onClick={()=>{setSetupForm({target:"",sd:"",name:""});setShowSetup(true);}} style={{...BP,padding:"6px 16px",fontSize:11}}>+ Setup Level {activeLevel+1}</button></div>)
+      :(<div>
+        <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:10,padding:"8px 12px",background:IQC_LEVEL_COLORS[activeLevel]+"0d",borderRadius:8,border:`1px solid ${IQC_LEVEL_COLORS[activeLevel]}33`}}>
+          <div style={{flex:1,display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6}}>
+            {[["Target",level.target?.toFixed?level.target.toFixed(3):level.target,cfg.unit],["SD",level.sd?.toFixed?level.sd.toFixed(3):level.sd,""],["CV%",(level.sd&&level.target&&level.target!==0)?(level.sd/level.target*100).toFixed(2)+"%":"—",""],["N runs",level.results?.length||0,"hasil"]].map(([l,v,u])=>(<div key={l} style={{textAlign:"center"}}><div style={{fontSize:9,color:T.textT,fontFamily:T.mono}}>{l}</div><div style={{fontSize:13,fontWeight:700,color:T.text,fontFamily:T.mono}}>{v}</div><div style={{fontSize:9,color:T.textT}}>{u}</div></div>))}
+          </div>
+          <div style={{display:"flex",gap:5}}>
+            <button className="sb" onClick={()=>{setSetupForm({target:level.target,sd:level.sd,name:level.name||""});setShowSetup(true);}} style={{...BS,padding:"4px 10px",fontSize:10}}>✏️</button>
+            <button className="sb" onClick={clearLevel} style={{...BS,padding:"4px 10px",fontSize:10,color:T.danger,borderColor:`${T.danger}44`}}>🗑</button>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:7,marginBottom:10,alignItems:"center"}}>
+          <input value={inputVal} onChange={e=>setInputVal(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addResult()} placeholder={"Hasil kontrol "+cfg.unit} style={{...IS,width:160,fontSize:12}}/>
+          <button className="pb" onClick={addResult} disabled={!inputVal.trim()} style={{...BP,padding:"6px 13px",fontSize:11}}>+ Tambah</button>
+          <span style={{fontSize:9,color:T.textT,fontFamily:T.mono}}>Enter = cepat</span>
+        </div>
+        {renderChart(level,activeLevel)}
+        {level.results?.length>=2&&renderViolSummary(level)}
+      </div>)}
+    </div>
+    {showSetup&&(<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",zIndex:999,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setShowSetup(false)}><div style={{background:T.surface,borderRadius:14,padding:24,width:340,boxShadow:"0 20px 60px rgba(0,0,0,.15)"}} onClick={e=>e.stopPropagation()}><div style={{fontSize:13,fontWeight:700,color:T.text,marginBottom:14}}>Setup {IQC_LEVEL_NAMES[activeLevel]}</div>{[{l:"Nama Level",k:"name",ph:"Kontrol Normal"},{l:"Target ("+cfg.unit+")",k:"target",ph:"Nilai target kit"},{l:"SD ("+cfg.unit+")",k:"sd",ph:"SD dari kit/lab"}].map(f=>(<div key={f.k} style={{marginBottom:11}}><div style={LS}>{f.l}</div><input value={setupForm[f.k]} onChange={e=>setSetupForm(p=>({...p,[f.k]:e.target.value}))} placeholder={f.ph} style={IS}/></div>))}<div style={{display:"flex",gap:9}}><button className="pb" onClick={setupLevel} style={{...BP,flex:1}}>💾 Simpan</button><button className="sb" onClick={()=>setShowSetup(false)} style={{...BS,flex:1}}>Batal</button></div></div></div>)}
+  </div>);
+}
+
+/* ══ TRANSFORMATION PANEL ══ */
+function TransformPanel({working,transform,setTransform,autoTx,setAutoTx,activeTx,rawSkew,txStats,paramLabel}){
+  const[expanded,setExpanded]=useState(false);
+  const txOpts=[{k:"none",l:"None",icon:"—",d:"Tidak ada transformasi"},{k:"log10",l:"Log₁₀",icon:"㏒",d:"Right-skewed berat (CRP, PCT, Bilirubin)"},{k:"ln",l:"Ln",icon:"ℓ",d:"Natural log, alternatif Log₁₀"},{k:"sqrt",l:"√x",icon:"√",d:"Count data (PLT, WBC)"},{k:"inverse",l:"1/x",icon:"⅟",d:"Left-skewed"},{k:"winsor",l:"Winsorization",icon:"✂",d:"Cap outlier, data tidak dibuang"},{k:"boxcox",l:"Box-Cox",icon:"λ",d:"Auto-optimasi λ untuk normalitas"}];
+  const autoSug=working?autoTransform(working):"none";
+  const skColor=s=>s===null?T.textT:Math.abs(s)<0.5?T.ok:Math.abs(s)<1?T.warn:T.danger;
+  const skLabel=s=>s===null?"—":Math.abs(s)<0.5?"✅ Normal":Math.abs(s)<1?"⚠ Mild":Math.abs(s)<2?"⚠ Moderate":"❌ Severe";
+  return(<div style={{...CS,padding:0,overflow:"hidden",marginBottom:12}}>
+    <div onClick={()=>setExpanded(!expanded)} style={{padding:"10px 18px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",background:activeTx!=="none"?T.blueL:T.surfB}}>
+      <div style={{display:"flex",alignItems:"center",gap:9}}><span style={{fontSize:16}}>⚗️</span><div><div style={{fontSize:12,fontWeight:600,color:T.text}}>Transformasi Data</div><div style={{fontSize:9,color:T.textT,fontFamily:T.mono}}>{activeTx==="none"?"Tidak aktif":"Aktif: "+transformLabel(activeTx)} · Skewness: {rawSkew??".."} · {skLabel(rawSkew)}</div></div></div>
+      <div style={{display:"flex",gap:8,alignItems:"center"}}>{activeTx!=="none"&&<span style={{fontSize:10,fontWeight:700,color:T.blueD,fontFamily:T.mono,padding:"2px 9px",background:T.blue+"18",borderRadius:20}}>{transformLabel(activeTx)}</span>}<span style={{fontSize:12,color:T.textT}}>{expanded?"▲":"▼"}</span></div>
+    </div>
+    {expanded&&<div style={{padding:"16px 18px"}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,padding:"10px 14px",background:T.surfB,borderRadius:9,border:`1px solid ${T.border}`}}>
+        <div className="tog" onClick={()=>setAutoTx(!autoTx)} style={{width:38,height:20,borderRadius:10,background:autoTx?T.blue:"#cbd5e1",position:"relative",flexShrink:0}}><div style={{position:"absolute",top:2,left:autoTx?19:2,width:16,height:16,borderRadius:"50%",background:"#fff",transition:"left .2s"}}/></div>
+        <div><div style={{fontSize:12,fontWeight:600,color:T.text}}>Auto-detect</div><div style={{fontSize:10,color:T.textS}}>Saran: <strong style={{color:T.blue}}>{transformLabel(autoSug)}</strong> · Skewness raw: <span style={{color:skColor(rawSkew),fontWeight:600}}>{rawSkew??".."}</span> {skLabel(rawSkew)}</div></div>
+        {activeTx!=="none"&&txStats&&<div style={{marginLeft:"auto",fontSize:10,fontFamily:T.mono,color:T.ok}}>CV setelah tx: {txStats.cv.toFixed(2)}%</div>}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:7}}>
+        {txOpts.map(t=>{const active=activeTx===t.k&&!autoTx;return(<div key={t.k} className="ch" onClick={()=>{setAutoTx(false);setTransform(t.k);}} style={{padding:"9px 11px",borderRadius:9,cursor:"pointer",background:active?"#eff6ff":T.surfB,border:`1.5px solid ${active?T.blue:T.border}`}}><div style={{display:"flex",alignItems:"center",gap:7,marginBottom:3}}><span style={{fontSize:14,fontFamily:T.mono,color:active?T.blue:T.textT}}>{t.icon}</span><span style={{fontSize:12,fontWeight:active?700:500,color:active?T.blueD:T.text,fontFamily:T.mono}}>{t.l}</span>{autoSug===t.k&&<span style={{fontSize:8,padding:"1px 5px",background:T.ok+"18",color:T.ok,borderRadius:10,fontWeight:600}}>Saran</span>}</div><div style={{fontSize:9,color:T.textS}}>{t.d}</div></div>);})}
+      </div>
+    </div>}
+  </div>);
+}
+
+/* ══ SIGMA PANEL ══ */
+function SigmaPanel({param,ward,cfg,stats,onSigmaChange,paramLabel}){
+  const sk=param+"_"+ward;
+  const saved=loadSigmaSettings()[sk]||{};
+  const[tea,setTea]=useState(saved.tea??cfg.tea??5.0);
+  const[bias,setBias]=useState(saved.bias??0.5);
+  const[cvOvr,setCvOvr]=useState(saved.cvOverride??"");
+  const[expanded,setExpanded]=useState(true);
+  const cvFromData=stats?+stats.cv.toFixed(2):null;
+  const cv=cvOvr!==""?parseFloat(cvOvr)||(cvFromData||3):cvFromData||3;
+  const sigma=+((tea-Math.abs(bias))/Math.max(cv,0.01)).toFixed(2);
+  const tier=getSigmaTier(sigma);
+  useEffect(()=>{saveSigmaSettings(sk,{tea,bias,cvOverride:cvOvr});onSigmaChange&&onSigmaChange(sigma,tier);},[tea,bias,cvOvr,sigma,sk]);
+  const slRow=(label,val,set,min,max,step,unit)=>(<div style={{marginBottom:12}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{fontSize:11,color:T.textS}}>{label}</span><span style={{fontSize:12,fontWeight:700,color:T.blue,fontFamily:T.mono}}>{val.toFixed(2)}{unit}</span></div><input type="range" min={min} max={max} step={step} value={val} onChange={e=>set(+e.target.value)} style={{width:"100%",accentColor:T.blue,height:4}}/></div>);
+  return(<div style={{...CS,padding:0,overflow:"hidden",marginBottom:14}}>
+    <div onClick={()=>setExpanded(!expanded)} style={{padding:"12px 18px",cursor:"pointer",background:`linear-gradient(135deg,${tier.bg},#fff)`,borderBottom:expanded?`1.5px solid ${tier.border}`:"none",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+      <div style={{display:"flex",alignItems:"center",gap:11}}><div style={{width:38,height:38,borderRadius:10,background:tier.color,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontSize:18,fontWeight:800,color:"#fff",fontFamily:T.mono}}>{tier.tier}</span></div><div><div style={{fontSize:12,fontWeight:700,color:T.text}}>σ Sigma Metric & Six Sigma QC</div><div style={{fontSize:10,color:T.textS}}>{paramLabel||param} · {ward}</div></div></div>
+      <div style={{display:"flex",alignItems:"center",gap:12}}><div style={{textAlign:"center",padding:"5px 14px",borderRadius:9,background:tier.color+"18",border:`1.5px solid ${tier.color}44`}}><div style={{fontSize:20,fontWeight:800,color:tier.color,fontFamily:T.mono,lineHeight:1}}>{sigma}σ</div><div style={{fontSize:9,fontWeight:600,color:tier.color}}>{tier.label}</div></div><span style={{fontSize:14,color:T.textT}}>{expanded?"▲":"▼"}</span></div>
+    </div>
+    {expanded&&<div style={{padding:"18px 20px"}}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18}}>
+      <div>
+        <div style={{fontSize:10,fontWeight:700,color:T.blueD,letterSpacing:1.5,textTransform:"uppercase",fontFamily:T.mono,marginBottom:12}}>Parameter Input</div>
+        {slRow("TEa — Total Allowable Error (%)",tea,setTea,0.5,25,0.1,"%")}
+        {slRow("Bias (%) — Inaccuracy",bias,setBias,0,15,0.1,"%")}
+        <div style={{marginBottom:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+            <span style={{fontSize:11,color:T.textS}}>CV (%) — Imprecision</span>
+            <div style={{display:"flex",gap:5,alignItems:"center"}}>
+              {cvFromData!==null&&<button onClick={()=>setCvOvr("")} style={{fontSize:9,padding:"1px 7px",borderRadius:5,border:`1px solid ${cvOvr===""?T.blue:T.border}`,background:cvOvr===""?T.blueL:"transparent",color:cvOvr===""?T.blueD:T.textT,cursor:"pointer",fontFamily:T.mono}}>Auto ({cvFromData}%)</button>}
+              <span style={{fontSize:12,fontWeight:700,color:T.blue,fontFamily:T.mono}}>{cv.toFixed(2)}%</span>
+            </div>
+          </div>
+          <input type="number" min={0.1} max={30} step={0.01} value={cvOvr} onChange={e=>setCvOvr(e.target.value)} placeholder={cvFromData?"Auto: "+cvFromData+"%":"Masukkan CV%"} style={{...IS,fontSize:11}}/>
+        </div>
+        <div style={{background:tier.bg,border:`1.5px solid ${tier.border}`,borderRadius:9,padding:"10px 13px"}}>
+          <div style={{fontSize:9,color:T.textT,fontFamily:T.mono,marginBottom:4,letterSpacing:1}}>FORMULA</div>
+          <div style={{fontSize:12,fontFamily:T.mono,color:T.text,lineHeight:1.9}}>σ = (TEa − |Bias|) / CV<br/>σ = ({tea.toFixed(1)}% − {Math.abs(bias).toFixed(1)}%) / {cv.toFixed(2)}%<br/><span style={{fontWeight:800,color:tier.color,fontSize:14}}>σ = {sigma}</span></div>
+        </div>
+      </div>
+      <div>
+        <div style={{fontSize:10,fontWeight:700,color:T.blueD,letterSpacing:1.5,textTransform:"uppercase",fontFamily:T.mono,marginBottom:12}}>QC Strategy</div>
+        {[{r:"≥ 6σ",l:"World Class",c:"#059669",rules:"1₃s",f:"1×/hari",a:sigma>=6},{r:"5–6σ",l:"Excellent",c:"#0ea5e9",rules:"1₂s·1₃s",f:"1×/hari",a:sigma>=5&&sigma<6},{r:"4–5σ",l:"Good",c:"#2563eb",rules:"1₂s·2₂s·R₄s",f:"2×/hari",a:sigma>=4&&sigma<5},{r:"3–4σ",l:"Marginal",c:"#d97706",rules:"All rules",f:"4×/hari",a:sigma>=3&&sigma<4},{r:"< 3σ",l:"Poor",c:"#dc2626",rules:"All rules",f:"6×/hari",a:sigma<3}].map(row=>(
+          <div key={row.r} style={{padding:"8px 11px",borderRadius:8,marginBottom:5,background:row.a?row.c+"12":T.surfB,border:`1.5px solid ${row.a?row.c:T.border}`,display:"grid",gridTemplateColumns:"45px 80px 1fr 55px",alignItems:"center",gap:6}}>
+            <span style={{fontSize:11,fontWeight:700,color:row.c,fontFamily:T.mono}}>{row.r}</span>
+            <span style={{fontSize:10,fontWeight:row.a?700:400,color:row.a?row.c:T.textS}}>{row.l}</span>
+            <span style={{fontSize:9,color:T.textT,fontFamily:T.mono}}>{row.rules}</span>
+            <span style={{fontSize:9,color:T.textT,fontFamily:T.mono}}>{row.f}</span>
+          </div>
+        ))}
+        <div style={{marginTop:10,padding:"9px 12px",background:T.surfB,borderRadius:8,border:`1px solid ${T.border}`}}>
+          <div style={{fontSize:9,color:T.textT,fontFamily:T.mono,marginBottom:5,letterSpacing:1}}>RULES AKTIF (σ={sigma})</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+            {Object.entries(tier.activeRules).map(([rule,active])=>(<span key={rule} style={{padding:"2px 9px",borderRadius:20,fontFamily:T.mono,fontSize:10,fontWeight:600,background:active?tier.color+"18":"#f1f5f9",color:active?tier.color:T.textT,border:`1px solid ${active?tier.color+"44":T.border}`,textDecoration:active?"none":"line-through"}}>{rule}</span>))}
+          </div>
+          <div style={{fontSize:9,color:T.textT,marginTop:6}}>{tier.qcLevels} level kontrol · {tier.qcFreq}</div>
+        </div>
+      </div>
+    </div></div>}
+  </div>);
+}
+
 /* ══ MAIN QC PANEL ══ */
 function QCPanel({data,cfg,blockSize,mult,useAoN,selMethods,apiKey,wardKey,wardLabel,paramLabel,param,onSave}){
   const working=useMemo(()=>!data?null:useAoN?data.filter(v=>v>=cfg.refLow&&v<=cfg.refHigh):data,[data,useAoN,cfg]);
+
+  // Transformation
   const[transform,setTransform]=useState("none");
   const[autoTx,setAutoTx]=useState(false);
   const activeTx=useMemo(()=>autoTx&&working?autoTransform(working):transform,[autoTx,transform,working]);
-  const txData=useMemo(()=>!working?null:activeTx==="none"?working:applyTransform(working,activeTx).filter(v=>v!==null),[working,activeTx]);
-  const txStats=useMemo(()=>{if(!txData||!txData.length)return null;const sa=safeArr(txData);if(!sa.length)return null;const m=avg(sa),s=std(sa);return{skew:+skewness(sa).toFixed(3),mean:m,sd:s,cv:m?((s/m)*100):0};},[txData]);
+  const txData=useMemo(()=>{if(!working)return null;if(activeTx==="none")return working;const tx=applyTransform(working,activeTx);return tx.length>=blockSize?tx:working;},[working,activeTx,blockSize]);
+  const txStats=useMemo(()=>{if(!txData||txData===working||!txData.length)return null;const sa=safeArr(txData);if(!sa.length)return null;const m=avg(sa),s=std(sa);return{mean:m,sd:s,cv:m?(s/m*100):0};},[txData,working]);
   const rawSkew=useMemo(()=>working&&working.length>=3?+skewness(working).toFixed(3):null,[working]);
+  const workData=txData||working;
+
+  // Series + limits
   const series=useMemo(()=>{
-    const d=txData||working;
-    if(!d||d.length<blockSize)return null;
-    const s={MA:calcMA(d,blockSize),EWMA:calcEWMA(d),TRIM:calcTrim(d,blockSize,cfg.trim),MEDIAN:calcMed(d,blockSize),MOVMED:calcMovMed(d,blockSize)};
-    // Remove methods that produce all-null series (e.g. MOVMED with tiny dataset)
+    if(!workData||workData.length<blockSize)return null;
+    const s={MA:calcMA(workData,blockSize),EWMA:calcEWMA(workData),TRIM:calcTrim(workData,blockSize,cfg.trim),MEDIAN:calcMed(workData,blockSize),MOVMED:calcMovMed(workData,blockSize)};
     Object.keys(s).forEach(m=>{if(s[m].every(v=>v===null))delete s[m];});
     return Object.keys(s).length?s:null;
-  },[txData,working,blockSize,cfg]);
+  },[workData,blockSize,cfg]);
   const limits=useMemo(()=>{if(!series)return null;const o={};Object.keys(series).forEach(m=>{o[m]=getLimits(series[m],mult);});return o;},[series,mult]);
-  const violations=useMemo(()=>{if(!series||!limits)return null;const o={};Object.keys(series).forEach(m=>{if(!limits[m]||!limits[m].ucl)return;o[m]=series[m].map((v,i)=>({idx:i,value:v,viol:v!==null&&!isNaN(v)&&(v>limits[m].ucl||v<limits[m].lcl)})).filter(d=>d.viol);});return o;},[series,limits]);
+  const violations=useMemo(()=>{if(!series||!limits)return null;const o={};Object.keys(series).forEach(m=>{if(!limits[m]?.ucl||isNaN(limits[m].ucl))return;o[m]=series[m].map((v,i)=>({idx:i,value:v,viol:v!==null&&!isNaN(v)&&(v>limits[m].ucl||v<limits[m].lcl)})).filter(d=>d.viol);});return o;},[series,limits]);
   const stats=useMemo(()=>{if(!working||!working.length)return null;const sa=safeArr(working);if(!sa.length)return null;const m=avg(sa),s=std(sa);return{n:sa.length,mean:m,sd:s,cv:m?((s/m)*100):0,median:med(sa)};},[working]);
   const ljMean=(txStats?.mean||stats?.mean)||0;
   const ljSd=(txStats?.sd||stats?.sd)||1;
-  // Init sigma from saved/default values so stat card shows immediately
-  const _initSigma=(()=>{
-    const sk=`${param}_${wardKey}`;
-    const sv=loadSigmaSettings()[sk]||{};
-    const tea=sv.tea??cfg.tea??5.0;
-    const bias=sv.bias??0.5;
-    const cvDef=sv.cvOverride?parseFloat(sv.cvOverride):3.0;
-    const sig=+((tea-Math.abs(bias))/cvDef).toFixed(2);
-    return{sig,tier:getSigmaTier(sig)};
-  })();
-  const[sigmaCurrent,setSigmaCurrent]=useState(_initSigma.sig);
-  const[sigmaTierCurrent,setSigmaTierCurrent]=useState(_initSigma.tier);
+
+  // Sigma
+  const _init=(()=>{const sk=param+"_"+wardKey;const sv=loadSigmaSettings()[sk]||{};const t=sv.tea??cfg.tea??5.0;const b=sv.bias??0.5;const cv=sv.cvOverride?parseFloat(sv.cvOverride):3.0;const sig=+((t-Math.abs(b))/Math.max(cv,0.01)).toFixed(2);return{sig,tier:getSigmaTier(sig)};})();
+  const[sigmaCurrent,setSigmaCurrent]=useState(_init.sig);
+  const[sigmaTierCurrent,setSigmaTierCurrent]=useState(_init.tier);
   const handleSigmaChange=useCallback((sig,tier)=>{setSigmaCurrent(sig);setSigmaTierCurrent(tier);},[]);
-  const wgViolations=useMemo(()=>working?checkWestgard(working,ljMean,ljSd,sigmaTierCurrent):[],[working,ljMean,ljSd,sigmaTierCurrent]);
-  const chartData=useMemo(()=>{if(!working||!series)return[];return working.map((v,i)=>{const p={idx:i+1,raw:+v.toFixed(3)};Object.keys(series).forEach(m=>{if(series[m][i]!==null)p[m]=series[m][i];});return p;});},[working,series]);
+
+  const wgViolations=useMemo(()=>(workData||working)?checkWestgard(workData||working,ljMean,ljSd,sigmaTierCurrent):[],[workData,working,ljMean,ljSd,sigmaTierCurrent]);
+  const chartData=useMemo(()=>{const d=workData||working;if(!d||!series)return[];return d.map((v,i)=>{const p={idx:i+1,raw:+v.toFixed(3)};Object.keys(series).forEach(m=>{if(series[m]&&series[m][i]!==null)p[m]=series[m][i];});return p;});},[workData,working,series]);
 
   const aiCtx=useMemo(()=>{
     if(!stats||!limits)return"Belum ada data.";
-    let c=`Parameter: ${paramLabel} (${cfg.unit}) | Ruang: ${wardLabel}\nN=${stats.n} Mean=${stats.mean.toFixed(3)} SD=${stats.sd.toFixed(3)} CV=${stats.cv.toFixed(2)}% Median=${stats.median.toFixed(3)}\n`;
-    selMethods.forEach(m=>{if(limits[m])c+=`${METHODS[m].label}: UCL=${limits[m].ucl.toFixed(3)} LCL=${limits[m].lcl.toFixed(3)} Violations=${violations?.[m]?.length??0}\n`;});
+    let c="Parameter: "+paramLabel+" ("+cfg.unit+") | Ruang: "+wardLabel+"\nN="+stats.n+" Mean="+stats.mean.toFixed(3)+" SD="+stats.sd.toFixed(3)+" CV="+stats.cv.toFixed(2)+"% Median="+stats.median.toFixed(3)+"\n";
+    selMethods.forEach(m=>{if(limits[m]&&!isNaN(limits[m].ucl))c+=METHODS[m]?.label+": UCL="+limits[m].ucl.toFixed(3)+" LCL="+limits[m].lcl.toFixed(3)+" Violations="+(violations?.[m]?.length??0)+"\n";});
     const rejects=wgViolations.filter(v=>v.rules.some(r=>r.type==="reject"));
-    c+=`Westgard: Total=${wgViolations.length} Reject=${rejects.length}\n`;
-    if(sigmaCurrent)c+=(["Sigma:",sigmaCurrent,"sigma |",(sigmaTierCurrent?.label||"")].join(" ")+";");
-
+    c+="Westgard: Total="+wgViolations.length+" Reject="+rejects.length+"\n";
+    if(sigmaCurrent)c+="Sigma: "+sigmaCurrent+" ("+((sigmaTierCurrent?.label)||"")+")\n";
     return c;
   },[stats,limits,violations,selMethods,paramLabel,cfg,wardLabel,wgViolations,sigmaCurrent,sigmaTierCurrent]);
 
-  // When stats loads for first time, trigger sigma recalc via SigmaPanel
-  // SigmaPanel handles this internally via cvFromData dependency
   const[saving,setSaving]=useState(false),[savedMsg,setSavedMsg]=useState("");
   const saveToDb=async()=>{
     if(!working||!stats)return;
     setSaving(true);setSavedMsg("");
     try{
-      const rows=working.map((v,i)=>({
-        param,ward:wardKey,value:v,
-        recorded_at:new Date(Date.now()-((working.length-1-i)*3600000)).toISOString(),
-      }));
+      const rows=working.map((v,i)=>({param,ward:wardKey,value:v,recorded_at:new Date(Date.now()-((working.length-1-i)*3600000)).toISOString()}));
       await db.saveSessions(rows);
-      setSavedMsg(`✅ ${rows.length} data tersimpan ke Supabase`);
+      setSavedMsg("✅ "+rows.length+" data tersimpan ke Supabase");
       onSave&&onSave();
-    }catch(e){setSavedMsg(`❌ ${e.message}`);}
+    }catch(e){setSavedMsg("❌ "+e.message);}
     finally{setSaving(false);}
   };
 
-  const TT=({active,payload,label})=>{if(!active||!payload?.length)return null;return(<div style={{background:T.surface,border:`1.5px solid ${T.borderM}`,borderRadius:8,padding:"8px 12px",fontFamily:T.mono,fontSize:10,boxShadow:"0 4px 14px rgba(14,165,233,.09)"}}><div style={{color:T.textS,marginBottom:3}}>Pasien #{label}</div>{payload.map(p=><div key={p.dataKey} style={{color:p.color||T.text,marginBottom:1}}>{p.dataKey}: {typeof p.value==="number"?p.value.toFixed(3):p.value}</div>)}</div>);};
+  const TT=({active,payload,label})=>{if(!active||!payload?.length)return null;return(<div style={{background:T.surface,border:`1.5px solid ${T.borderM}`,borderRadius:8,padding:"8px 12px",fontFamily:T.mono,fontSize:10}}><div style={{color:T.textS,marginBottom:3}}>Pasien #{label}</div>{payload.map(p=><div key={p.dataKey} style={{color:p.color||T.text,marginBottom:1}}>{p.dataKey}: {typeof p.value==="number"?p.value.toFixed(3):p.value}</div>)}</div>);};
 
-  if(!data||data.length<blockSize)return(<div style={{...CS,textAlign:"center",padding:28}}>
-    <div style={{fontSize:13,color:T.textS}}>Belum ada data — {wardLabel}</div>
-    <div style={{fontSize:10,color:T.textT,marginTop:5,fontFamily:T.mono}}>Min {blockSize} data diperlukan</div>
-  </div>);
+  if(!data||data.length<blockSize)return(<div style={{...CS,textAlign:"center",padding:28}}><div style={{fontSize:13,color:T.textS}}>Belum ada data — {wardLabel}</div><div style={{fontSize:10,color:T.textT,marginTop:5,fontFamily:T.mono}}>Min {blockSize} data diperlukan</div></div>);
 
   return(<div>
     {/* Stats */}
-    {stats&&<div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:9,marginBottom:16}}>
+    {stats&&<div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:9,marginBottom:14}}>
       <StatCard label="N" value={stats.n} unit="data" color={T.blue} delay={0}/>
-      <StatCard label="Mean" value={stats.mean.toFixed(2)} unit={cfg.unit} color={T.blue} delay={40}/>
-      <StatCard label="SD" value={stats.sd.toFixed(3)} unit="" color={T.ok} delay={80}/>
-      <StatCard label="CV%" value={stats.cv.toFixed(2)+"%"} unit="" color={stats.cv>10?T.danger:T.warn} warn={stats.cv>10} delay={120}/>
-      <StatCard label="Sigma (σ)" value={sigmaCurrent!==null?sigmaCurrent+"σ":"—"} unit={sigmaTierCurrent?.label||"Set TEa & Bias ↓"} color={sigmaTierCurrent?.color||T.textT} warn={sigmaCurrent!==null&&sigmaCurrent<3} delay={160}/>
-      <StatCard label="WG Reject" value={wgViolations.filter(v=>v.rules.some(r=>r.type==="reject")).length} unit="violations" color={T.danger} warn={wgViolations.some(v=>v.rules.some(r=>r.type==="reject"))} delay={200}/>
+      <StatCard label="Mean" value={stats.mean.toFixed(2)} unit={cfg.unit} color={T.blue} delay={35}/>
+      <StatCard label="SD" value={stats.sd.toFixed(3)} unit="" color={T.ok} delay={70}/>
+      <StatCard label="CV%" value={stats.cv.toFixed(2)+"%"} unit="" color={stats.cv>10?T.danger:T.warn} warn={stats.cv>10} delay={105}/>
+      <StatCard label="Sigma (σ)" value={sigmaCurrent!==null?sigmaCurrent+"σ":"—"} unit={sigmaTierCurrent?.label||"Set TEa ↓"} color={sigmaTierCurrent?.color||T.textT} warn={sigmaCurrent!==null&&sigmaCurrent<3} delay={140}/>
+      <StatCard label="WG Reject" value={wgViolations.filter(v=>v.rules.some(r=>r.type==="reject")).length} unit="violations" color={T.danger} warn={wgViolations.some(v=>v.rules.some(r=>r.type==="reject"))} delay={175}/>
     </div>}
 
-    {/* Save to Supabase */}
-    <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:14}}>
-      <button className="pb" onClick={saveToDb} disabled={saving} style={{...BP,display:"flex",alignItems:"center",gap:6,padding:"7px 16px",fontSize:11,background:"#0369a1"}}>
-        {saving?<><Sp/> Menyimpan...</>:"☁️ Simpan ke Supabase"}
-      </button>
+    {/* Save */}
+    <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:12}}>
+      <button className="pb" onClick={saveToDb} disabled={saving} style={{...BP,display:"flex",alignItems:"center",gap:6,padding:"7px 16px",fontSize:11,background:"#0369a1"}}>{saving?<><Sp/> Menyimpan...</>:"☁️ Simpan ke Supabase"}</button>
       {savedMsg&&<div style={{fontSize:12,color:savedMsg.startsWith("✅")?T.ok:T.danger,fontFamily:T.mono}}>{savedMsg}</div>}
     </div>
-
-    {/* Transformation Panel */}
-    <TransformPanel working={working} transform={transform} setTransform={setTransform} autoTx={autoTx} setAutoTx={setAutoTx} activeTx={activeTx} rawSkew={rawSkew} txStats={txStats} paramLabel={paramLabel}/>
-
-    {/* IQC Panel */}
-    <IQCPanel param={param} ward={wardKey} wardLabel={wardLabel} paramLabel={paramLabel} cfg={cfg} sigmaTierCurrent={sigmaTierCurrent} apiKey={apiKey}/>
 
     {/* Sigma Panel */}
     <SigmaPanel param={param} ward={wardKey} cfg={cfg} stats={stats} onSigmaChange={handleSigmaChange} paramLabel={paramLabel}/>
 
+    {/* Transformation Panel */}
+    <TransformPanel working={working} transform={transform} setTransform={setTransform} autoTx={autoTx} setAutoTx={setAutoTx} activeTx={activeTx} rawSkew={rawSkew} txStats={txStats} paramLabel={paramLabel}/>
+
     {/* Levey-Jennings Chart */}
-    {stats&&<div style={{marginBottom:16}}><LJChart values={workingForLJ} mean={txStats?.mean||stats.mean} sdVal={txStats?.sd||stats.sd} paramLabel={paramLabel+(activeTx!=="none"?" ["+transformLabel(activeTx)+"]":"")} wardLabel={wardLabel} unit={activeTx!=="none"?"transformed":cfg.unit} violations={wgViolations} sigmaTier={sigmaTierCurrent}/></div>}
+    {stats&&<div style={{marginBottom:14}}><LJChart values={workData||working} mean={ljMean} sdVal={ljSd} paramLabel={paramLabel+(activeTx!=="none"?" ["+transformLabel(activeTx)+"]":"")} wardLabel={wardLabel} unit={activeTx!=="none"?"tx":cfg.unit} violations={wgViolations} sigmaTier={sigmaTierCurrent}/></div>}
 
     {/* PBRTQC Chart */}
     {chartData.length>0&&series&&limits&&(()=>{
-      // Auto Y domain: use min UCL/LCL across methods + raw data range, with padding
-      const allVals=chartData.flatMap(d=>[d.raw,...selMethods.map(m=>d[m]).filter(Boolean)]);
-      const allLimits=selMethods.flatMap(m=>[limits[m].ucl,limits[m].lcl]);
-      const allY=[...allVals,...allLimits].filter(v=>v!=null&&!isNaN(v));
-      const yMin=Math.min(...allY);const yMax=Math.max(...allY);
+      const allVals=chartData.flatMap(d=>[d.raw,...selMethods.filter(m=>series[m]).map(m=>d[m]).filter(Boolean)]);
+      const allLims=selMethods.filter(m=>limits[m]&&!isNaN(limits[m].ucl)).flatMap(m=>[limits[m].ucl,limits[m].lcl]);
+      const allY=safeArr([...allVals,...allLims]);
+      const yMin=allY.length?Math.min(...allY):0;const yMax=allY.length?Math.max(...allY):1;
       const yPad=(yMax-yMin)*0.12||1;
-      const pbrtqcYDomain=[+(yMin-yPad).toFixed(3),+(yMax+yPad).toFixed(3)];
-
-      // Zoom state for PBRTQC chart
-      return(
-        <PBRTQCChart chartData={chartData} selMethods={selMethods} limits={limits} cfg={cfg} paramLabel={paramLabel} TT={TT} yDomain={pbrtqcYDomain} iqcPoints={getIQCOverlayPoints(param,wardKey)} activeTx={activeTx}/>
-      );
+      const yDom=[+(yMin-yPad).toFixed(3),+(yMax+yPad).toFixed(3)];
+      const iqcPts=getIQCOverlayPoints(param,wardKey);
+      return(<div style={{...CS,padding:18,marginBottom:14}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+          <div style={{fontSize:13,fontWeight:600,color:T.text}}>PBRTQC Control Chart — {paramLabel}{activeTx!=="none"&&<span style={{fontSize:10,color:T.blue,fontFamily:T.mono,marginLeft:8}}>[{transformLabel(activeTx)}]</span>}</div>
+        </div>
+        <ResponsiveContainer width="100%" height={270}>
+          <LineChart data={chartData} margin={{top:4,right:48,bottom:12,left:8}}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(14,165,233,.07)"/>
+            <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border}/>
+            <YAxis tick={{fontSize:9,fill:T.textT}} stroke={T.border} domain={yDom} allowDataOverflow label={{value:activeTx!=="none"?"tx":cfg.unit,angle:-90,position:"insideLeft",fill:T.textT,fontSize:9,dx:-4}}/>
+            <Tooltip content={<TT/>}/><Legend wrapperStyle={{fontSize:10,paddingTop:5}}/>
+            <Line dataKey="raw" stroke="rgba(14,165,233,.14)" dot={false} strokeWidth={1} name="Raw" legendType="none"/>
+            <ReferenceLine y={cfg.refHigh} stroke={T.textT} strokeDasharray="4 4" strokeOpacity={.35} label={{value:"Ref↑",fill:T.textT,fontSize:8,position:"right"}}/>
+            <ReferenceLine y={cfg.refLow} stroke={T.textT} strokeDasharray="4 4" strokeOpacity={.35} label={{value:"Ref↓",fill:T.textT,fontSize:8,position:"right"}}/>
+            {selMethods.filter(m=>series[m]&&limits[m]&&!isNaN(limits[m].ucl)).map(m=>[
+              <Line key={m} dataKey={m} stroke={METHODS[m]?.color||"#888"} dot={false} strokeWidth={2} name={METHODS[m]?.label||m} connectNulls strokeDasharray={METHODS[m]?.dash||"none"}/>,
+              <ReferenceLine key={m+"u"} y={limits[m].ucl} stroke={METHODS[m]?.color||"#888"} strokeDasharray="2 5" strokeOpacity={.3} label={{value:"UCL",fill:METHODS[m]?.color||"#888",fontSize:7,position:"right"}}/>,
+              <ReferenceLine key={m+"l"} y={limits[m].lcl} stroke={METHODS[m]?.color||"#888"} strokeDasharray="2 5" strokeOpacity={.3} label={{value:"LCL",fill:METHODS[m]?.color||"#888",fontSize:7,position:"right"}}/>,
+            ])}
+            {iqcPts.map((pt,i)=><ReferenceLine key={"iq"+i} x={pt.idx} stroke={pt.color} strokeWidth={1} strokeDasharray="2 4" strokeOpacity={0.65} label={{value:"♦",fill:pt.color,fontSize:10,position:"top"}}/>)}
+          </LineChart>
+        </ResponsiveContainer>
+        {iqcPts.length>0&&<div style={{display:"flex",gap:7,flexWrap:"wrap",marginTop:6,padding:"4px 9px",background:T.surfB,borderRadius:7,fontSize:9,fontFamily:T.mono,color:T.textS}}>
+          <span style={{fontWeight:600,color:T.text}}>IQC Overlay:</span>
+          {[0,1,2].map(i=>{const pts=iqcPts.filter(p=>p.level===i);if(!pts.length)return null;return<span key={i} style={{color:["#0ea5e9","#10b981","#f59e0b"][i]}}>♦ L{i+1}({pts.length})</span>;})}
+        </div>}
+      </div>);
     })()}
+
+    {/* IQC Panel */}
+    <IQCPanel param={param} ward={wardKey} wardLabel={wardLabel} paramLabel={paramLabel} cfg={cfg} sigmaTierCurrent={sigmaTierCurrent}/>
 
     {/* Westgard */}
     <div style={{marginBottom:14}}><WestgardPanel violations={wgViolations}/></div>
@@ -1672,7 +998,6 @@ function QCPanel({data,cfg,blockSize,mult,useAoN,selMethods,apiKey,wardKey,wardL
     <AIInterpret apiKey={apiKey} context={aiCtx} paramLabel={paramLabel} ward={wardLabel}/>
   </div>);
 }
-
 
 /* ══ LOGO ══ */
 const LOGO = "/logo.png";
@@ -1703,7 +1028,7 @@ function LoadingScreen({onDone}){
       </div>
       <div style={{fontSize:28,fontWeight:700,color:"#fff",letterSpacing:-.5,marginBottom:4}}>PasienQuC</div>
       <div style={{fontSize:12,color:"rgba(14,165,233,.8)",fontFamily:T.mono,letterSpacing:2,marginBottom:8,textTransform:"uppercase"}}>Pencitraan Biomedis, Riset & Teknologi QC</div>
-      <div style={{fontSize:11,color:"rgba(255,255,255,.4)",fontFamily:T.mono,marginBottom:32}}>v.0.4.0</div>
+      <div style={{fontSize:11,color:"rgba(255,255,255,.4)",fontFamily:T.mono,marginBottom:32}}>v.0.5.0</div>
       {/* Progress bar */}
       <div style={{width:280,marginBottom:14}}>
         <div style={{background:"rgba(255,255,255,.08)",borderRadius:20,height:6,overflow:"hidden"}}>
@@ -1740,7 +1065,7 @@ function AboutTab(){
         <div style={{background:"linear-gradient(135deg,#0b1929,#0c2340,#0b3060)",padding:"32px 36px",display:"flex",alignItems:"center",gap:28}}>
           <img src={LOGO} alt="PasienQuC" style={{width:90,height:90,objectFit:"contain",filter:"drop-shadow(0 0 16px rgba(14,165,233,.5))",flexShrink:0}}/>
           <div>
-            <div style={{fontSize:26,fontWeight:700,color:"#fff",letterSpacing:-.5,marginBottom:4}}>PasienQuC <span style={{fontSize:14,fontWeight:400,color:"rgba(14,165,233,.8)",fontFamily:T.mono}}>v.0.4.0</span></div>
+            <div style={{fontSize:26,fontWeight:700,color:"#fff",letterSpacing:-.5,marginBottom:4}}>PasienQuC <span style={{fontSize:14,fontWeight:400,color:"rgba(14,165,233,.8)",fontFamily:T.mono}}>v.0.5.0</span></div>
             <div style={{fontSize:13,color:"rgba(14,165,233,.9)",fontFamily:T.mono,letterSpacing:1.5,textTransform:"uppercase",marginBottom:10}}>Pencitraan Biomedis, Riset & Teknologi Quality Control</div>
             <div style={{fontSize:13,color:"rgba(255,255,255,.7)",lineHeight:1.7,maxWidth:520}}>Sistem pemantauan kualitas laboratorium berbasis data pasien (PBRTQC) — lebih cepat, lebih cerdas, berbasis cloud.</div>
             <div style={{display:"flex",gap:8,marginTop:12,flexWrap:"wrap"}}>
@@ -1777,7 +1102,7 @@ function AboutTab(){
             </div>
             <div style={{textAlign:"right",flexShrink:0}}>
               <div style={{fontSize:10,color:T.textT,fontFamily:T.mono,marginBottom:3}}>Versi saat ini</div>
-              <div style={{fontSize:18,fontWeight:700,color:T.blue,fontFamily:T.mono}}>v.0.4.0</div>
+              <div style={{fontSize:18,fontWeight:700,color:T.blue,fontFamily:T.mono}}>v.0.5.0</div>
               <div style={{fontSize:10,color:T.textT,fontFamily:T.mono}}>April 2026</div>
             </div>
           </div>
@@ -1914,7 +1239,7 @@ function MiddlewareTab(){
   -d '{"param":"${param}","ward":"${ward}","value":${value},"recorded_at":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}'`;
 
   const jsonExample=(ward="IGD",param="Hb",value="12.5")=>JSON.stringify({
-    param,ward,value:parseNum(value),
+    param,ward,value:parseFloat(value),
     recorded_at:new Date().toISOString()
   },null,2);
 
@@ -2245,36 +1570,10 @@ export default function PasienQuC(){
 
   const handleFile=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>setPasteText(ev.target.result);r.readAsText(f);};
   const handlePaste=w=>{
-    const p=parseCSV(pasteText);
-    if(!p)return alert("Format tidak dikenali. Pastikan ada header di baris pertama.");
-    
-    // Find matching column — check aliases + param name + numeric fallback
-    const col=
-      // 1. Exact param key match
-      p.hdr.find(h=>h.trim()===param)||
-      // 2. Case-insensitive param match
-      p.hdr.find(h=>h.toLowerCase().trim()===param.toLowerCase())||
-      // 3. Alias match (Natrium→Na, Kreatinin→Kreatinin, dll)
-      p.hdr.find(h=>PARAM_ALIASES[h.toLowerCase().trim()]===param)||
-      // 4. Partial match (header contains param name)
-      p.hdr.find(h=>h.toLowerCase().includes(param.toLowerCase()))||
-      // 5. Param name contains header
-      p.hdr.find(h=>param.toLowerCase().includes(h.toLowerCase())&&h.length>1)||
-      // 6. First numeric column (fallback)
-      p.hdr.find(h=>p.rows.slice(0,5).some(r=>!isNaN(parseNum(r[h]))));
-
-    if(!col){
-      const hdrList=p.hdr.join(", ");
-      return alert(`Kolom untuk parameter "${param}" tidak ditemukan.\n\nHeader yang terdeteksi: ${hdrList}\n\nGunakan nama kolom seperti: ${param}, atau nama lengkap (Natrium, Kreatinin, dll).`);
-    }
-
-    const vals=p.rows.map(r=>parseNum(r[col])).filter(v=>!isNaN(v)&&isFinite(v));
-    if(vals.length===0) return alert("Tidak ada nilai numerik valid yang ditemukan di kolom tersebut.\nPastikan format angka benar (gunakan koma atau titik sebagai desimal).");
-    
-    setWardRaw(w,vals);
-    // Show success feedback
-    const rejCount=p.rows.length-vals.length;
-   if(rejCount>0) alert("✅ "+vals.length+" data berhasil diproses. "+rejCount+" baris dilewati (bukan angka).");
+    const p=parseCSV(pasteText);if(!p)return alert("Format tidak dikenali.");
+    const col=p.hdr.find(h=>h.toLowerCase().includes(param.toLowerCase()))||p.hdr.find(h=>p.rows.every(r=>!isNaN(parseFloat(r[h]))));
+    if(!col)return alert("Kolom numerik tidak ditemukan.");
+    setWardRaw(w,p.rows.map(r=>parseFloat(r[col])).filter(v=>!isNaN(v)));
   };
 
   const combinedRaw=useMemo(()=>{const all=selWards.flatMap(w=>getWardRaw(w)||[]);return all.length?all:null;},[wardData,selWards,group,param]);
@@ -2296,7 +1595,7 @@ export default function PasienQuC(){
           <img src={LOGO} alt="PasienQuC" style={{width:"100%",height:"100%",objectFit:"contain",filter:"drop-shadow(0 0 6px rgba(14,165,233,.4))"}}/>
         </div>
         <div>
-          <div style={{fontSize:15,fontWeight:700,color:T.text,letterSpacing:-.3}}>PasienQuC <span style={{color:T.blue}}>·</span> v.0.4.0</div>
+          <div style={{fontSize:15,fontWeight:700,color:T.text,letterSpacing:-.3}}>PasienQuC <span style={{color:T.blue}}>·</span> v.0.5.0</div>
           <div style={{fontSize:9,color:T.textT,fontFamily:T.mono,letterSpacing:1}}>LJ Chart · Westgard · Tren · Supabase · AI</div>
         </div>
       </div>
@@ -2474,7 +1773,7 @@ export default function PasienQuC(){
 
     {/* FOOTER */}
     <div style={{borderTop:`1.5px solid ${T.border}`,background:T.surface,padding:"11px 24px",display:"flex",alignItems:"center",justifyContent:"center",gap:12,marginTop:20}}>
-      <div style={{display:"flex",alignItems:"center",gap:6}}><div style={{width:28,height:28,borderRadius:7,background:"linear-gradient(135deg,#0b1929,#0c3060)",display:"flex",alignItems:"center",justifyContent:"center",padding:2}}><img src={LOGO} alt="PasienQuC" style={{width:"100%",height:"100%",objectFit:"contain"}}/></div><span style={{fontSize:12,fontWeight:700,color:T.text}}>PasienQuC</span><span style={{fontSize:9,color:T.textT,fontFamily:T.mono,background:T.blueL,padding:"2px 6px",borderRadius:5}}>v.0.4.0</span></div>
+      <div style={{display:"flex",alignItems:"center",gap:6}}><div style={{width:28,height:28,borderRadius:7,background:"linear-gradient(135deg,#0b1929,#0c3060)",display:"flex",alignItems:"center",justifyContent:"center",padding:2}}><img src={LOGO} alt="PasienQuC" style={{width:"100%",height:"100%",objectFit:"contain"}}/></div><span style={{fontSize:12,fontWeight:700,color:T.text}}>PasienQuC</span><span style={{fontSize:9,color:T.textT,fontFamily:T.mono,background:T.blueL,padding:"2px 6px",borderRadius:5}}>v.0.5.0</span></div>
       <div style={{width:1,height:14,background:T.border}}/>
       <div style={{fontSize:11,color:T.textS,fontFamily:T.mono}}>Aplikasi dibuat oleh <span style={{color:T.blue,fontWeight:600}}>dr. WIY</span></div>
       <div style={{width:1,height:14,background:T.border}}/>
