@@ -282,86 +282,86 @@ function GroupSel({selected,onChange}){
 function LJChart({values, mean, sdVal, paramLabel, wardLabel, unit, violations, sigmaTier}){
   const violSet=new Set(violations.map(v=>v.idx));
   const rejectSet=new Set(violations.filter(v=>v.rules.some(r=>r.type==="reject")).map(v=>v.idx));
+  const n=values.length;
 
-  // Zoom state
-  const[zLeft,setZLeft]=useState(null);
-  const[zRight,setZRight]=useState(null);
-  const[selecting,setSelecting]=useState(false);
-  const[xDomain,setXDomain]=useState([1,values.length]);
-  const[isZoomed,setIsZoomed]=useState(false);
+  // Zoom: slider-based window [start, end]
+  const[winStart,setWinStart]=useState(0);
+  const[winSize,setWinSize]=useState(Math.min(n,60));
 
-  // Auto Y: tight around data + SD lines with padding
+  const winEnd=Math.min(n, winStart+winSize);
+  const displayData=useMemo(()=>{
+    const sv=safeArr(values);
+    return sv.map((v,i)=>({idx:i+1,value:+v.toFixed(3),z:+((v-mean)/sdVal).toFixed(2)}))
+      .slice(winStart, winEnd);
+  },[values,mean,sdVal,winStart,winEnd]);
+
+  const isZoomed=winSize<n;
+  const resetZoom=()=>{setWinStart(0);setWinSize(Math.min(n,60));};
+
+  // Auto Y: fit data in view + SD lines
   const yPad=sdVal*0.7;
-  const dataMin=Math.min(...safeArr(values));
-  const dataMax=Math.max(...safeArr(values));
-  const yMin=Math.min(dataMin, mean-3*sdVal)-yPad;
-  const yMax=Math.max(dataMax, mean+3*sdVal)+yPad;
-  const yDomain=[+yMin.toFixed(3),+yMax.toFixed(3)];
+  const viewVals=safeArr(displayData.map(d=>d.value));
+  const yMin=Math.min(viewVals.length?Math.min(...viewVals):mean, mean-3*sdVal)-yPad;
+  const yMax=Math.max(viewVals.length?Math.max(...viewVals):mean, mean+3*sdVal)+yPad;
 
-  const fullData=values.map((v,i)=>({idx:i+1,value:+v.toFixed(3),z:+((v-mean)/sdVal).toFixed(2)}));
-  const displayData=fullData.filter(d=>d.idx>=xDomain[0]&&d.idx<=xDomain[1]);
-
-  const onMouseDown=e=>{if(!e?.activeLabel)return;setZLeft(e.activeLabel);setSelecting(true);};
-  const onMouseMove=e=>{if(!selecting||!e?.activeLabel)return;setZRight(e.activeLabel);};
-  const onMouseUp=()=>{
-    setSelecting(false);
-    if(zLeft!==null&&zRight!==null&&zLeft!==zRight){
-      const l=Math.min(zLeft,zRight),r=Math.max(zLeft,zRight);
-      if(r-l>=2){setXDomain([l,r]);setIsZoomed(true);}
-    }
-    setZLeft(null);setZRight(null);
-  };
-  const resetZoom=()=>{setXDomain([1,values.length]);setIsZoomed(false);};
-
-  const CustomDot=(props)=>{
-    const{cx,cy,payload}=props;
+  const CustomDot=({cx,cy,payload})=>{
     if(cx==null||cy==null)return null;
     const idx=payload.idx-1;
     const color=rejectSet.has(idx)?T.danger:violSet.has(idx)?T.warn:T.ok;
     const r=rejectSet.has(idx)?6:violSet.has(idx)?5:3.5;
-    return<circle cx={cx} cy={cy} r={r} fill={color} stroke="#fff" strokeWidth={1.5}/>;
+    return <circle cx={cx} cy={cy} r={r} fill={color} stroke="#fff" strokeWidth={1.5}/>;
   };
 
   const TT=({active,payload,label})=>{
     if(!active||!payload?.length)return null;
     const p=payload[0]?.payload;
     const viol=violations.find(v=>v.idx===label-1);
-    return(<div style={{background:T.surface,border:`1.5px solid ${T.borderM}`,borderRadius:9,padding:"10px 13px",fontFamily:T.mono,fontSize:11,boxShadow:"0 4px 14px rgba(14,165,233,.1)",maxWidth:220}}>
-      <div style={{color:T.textS,marginBottom:4}}>Titik #{label}</div>
+    return(<div style={{background:T.surface,border:`1.5px solid ${T.borderM}`,borderRadius:9,padding:"10px 13px",fontFamily:T.mono,fontSize:11,boxShadow:"0 4px 14px rgba(14,165,233,.1)"}}>
+      <div style={{color:T.textS,marginBottom:4}}>#{label}</div>
       <div style={{color:T.text,fontWeight:600}}>{p?.value} {unit}</div>
-      <div style={{color:T.textT}}>z = {p?.z}</div>
-      {viol&&<div style={{marginTop:6,paddingTop:6,borderTop:`1px solid ${T.border}`}}>
-        {viol.rules.map(r=><div key={r.rule} style={{color:r.type==="reject"?T.danger:T.warn,fontSize:10}}>{r.rule}: {r.desc}</div>)}
-      </div>}
+      <div style={{color:T.textT}}>z={p?.z}</div>
+      {viol&&viol.rules.map(r=><div key={r.rule} style={{color:r.type==="reject"?T.danger:T.warn,fontSize:10}}>{r.rule}: {r.desc}</div>)}
     </div>);
   };
 
   return(<div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:16,padding:20,boxShadow:"0 2px 12px rgba(14,165,233,.06)"}}>
-    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,flexWrap:"wrap",gap:8}}>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,flexWrap:"wrap",gap:8}}>
       <div>
         <div style={{fontSize:14,fontWeight:700,color:T.text,letterSpacing:-.2}}>Levey-Jennings Chart</div>
-        <div style={{fontSize:10,color:T.textT,fontFamily:T.mono,marginTop:2}}>{wardLabel} · n={values.length} · Mean={mean.toFixed(3)} · SD={sdVal.toFixed(3)}</div>
+        <div style={{fontSize:10,color:T.textT,fontFamily:T.mono,marginTop:2}}>{wardLabel} · n={n} · Mean={mean.toFixed(3)} · SD={sdVal.toFixed(3)}</div>
       </div>
-      <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-        <div style={{display:"flex",gap:8,fontSize:11,fontFamily:T.mono}}>
-          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:8,height:8,borderRadius:"50%",background:T.ok,display:"inline-block"}}/> Normal</span>
-          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:8,height:8,borderRadius:"50%",background:T.warn,display:"inline-block"}}/> Warning</span>
-          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:8,height:8,borderRadius:"50%",background:T.danger,display:"inline-block"}}/> Reject</span>
+      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+        <div style={{display:"flex",gap:8,fontSize:11}}>
+          {[["●",T.ok,"Normal"],["●",T.warn,"Warning"],["●",T.danger,"Reject"]].map(([s,col,lbl])=>(
+            <span key={lbl} style={{display:"flex",alignItems:"center",gap:3,fontFamily:T.mono}}>
+              <span style={{color:col}}>{s}</span><span style={{color:T.textS}}>{lbl}</span>
+            </span>
+          ))}
         </div>
-        {isZoomed&&<button onClick={resetZoom} style={{padding:"4px 12px",background:T.blueL,border:`1px solid ${T.blue}44`,borderRadius:8,color:T.blueD,fontSize:11,fontFamily:T.font,fontWeight:600,cursor:"pointer"}}>↩ Reset Zoom</button>}
-        <span style={{fontSize:9,color:T.textT,fontFamily:T.mono}}>{isZoomed?`#${xDomain[0]}–${xDomain[1]}`:"drag untuk zoom"}</span>
+        {isZoomed&&<button onClick={resetZoom} style={{padding:"4px 12px",background:T.blueL,border:`1px solid ${T.blue}44`,borderRadius:8,color:T.blueD,fontSize:11,fontFamily:T.font,fontWeight:600,cursor:"pointer"}}>↩ Semua</button>}
       </div>
     </div>
-    <ResponsiveContainer width="100%" height={320}>
-      <ComposedChart data={displayData} margin={{top:8,right:52,bottom:14,left:8}}
-        onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp}
-        style={{cursor:selecting?"crosshair":"default"}}>
+
+    {/* Zoom controls */}
+    {n>20&&<div style={{display:"flex",gap:12,alignItems:"center",marginBottom:10,padding:"8px 12px",background:T.surfB,borderRadius:9,border:`1px solid ${T.border}`}}>
+      <span style={{fontSize:10,color:T.textT,fontFamily:T.mono,flexShrink:0}}>Window:</span>
+      <input type="range" min={10} max={n} step={5} value={winSize}
+        onChange={e=>{const s=+e.target.value;setWinSize(s);setWinStart(v=>Math.min(v,n-s));}}
+        style={{flex:1,accentColor:T.blue}}/>
+      <span style={{fontSize:10,color:T.blue,fontFamily:T.mono,flexShrink:0,width:60}}>{winSize} titik</span>
+      <input type="range" min={0} max={Math.max(0,n-winSize)} step={1} value={winStart}
+        onChange={e=>setWinStart(+e.target.value)}
+        style={{flex:1,accentColor:"#8b5cf6"}}/>
+      <span style={{fontSize:9,color:T.textT,fontFamily:T.mono,flexShrink:0}}>#{winStart+1}–{winEnd}</span>
+    </div>}
+
+    <ResponsiveContainer width="100%" height={310}>
+      <ComposedChart data={displayData} margin={{top:8,right:52,bottom:14,left:8}}>
         <CartesianGrid strokeDasharray="3 3" stroke="rgba(14,165,233,.06)"/>
-        <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border} type="number"
-          domain={[xDomain[0],xDomain[1]]} allowDataOverflow
+        <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border}
           label={{value:"Urutan Pasien",position:"insideBottom",offset:-4,fill:T.textT,fontSize:9}}/>
         <YAxis tick={{fontSize:9,fill:T.textT}} stroke={T.border}
-          domain={yDomain} allowDataOverflow tickCount={9}
+          domain={[+yMin.toFixed(3),+yMax.toFixed(3)]} allowDataOverflow tickCount={9}
           label={{value:unit,angle:-90,position:"insideLeft",fill:T.textT,fontSize:9,dx:-4}}/>
         <Tooltip content={<TT/>}/>
         <ReferenceLine y={mean+3*sdVal} stroke={T.danger} strokeWidth={1.5} strokeDasharray="5 3" label={{value:"+3SD",fill:T.danger,fontSize:8,position:"right"}}/>
@@ -371,19 +371,12 @@ function LJChart({values, mean, sdVal, paramLabel, wardLabel, unit, violations, 
         <ReferenceLine y={mean-sdVal} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3 4" label={{value:"-1SD",fill:T.textT,fontSize:8,position:"right"}}/>
         <ReferenceLine y={mean-2*sdVal} stroke={T.warn} strokeWidth={1.2} strokeDasharray="5 3" label={{value:"-2SD",fill:T.warn,fontSize:8,position:"right"}}/>
         <ReferenceLine y={mean-3*sdVal} stroke={T.danger} strokeWidth={1.5} strokeDasharray="5 3" label={{value:"-3SD",fill:T.danger,fontSize:8,position:"right"}}/>
-        {selecting&&zLeft!==null&&zRight!==null&&(
-          <ReferenceArea x1={zLeft} x2={zRight} fill={T.blue} fillOpacity={0.1} strokeOpacity={0.3}/>
-        )}
-        <Line dataKey="value" stroke={T.blue} strokeWidth={1.8} dot={<CustomDot/>} activeDot={false}
-          name={paramLabel} connectNulls isAnimationActive={false}/>
+        <Line dataKey="value" stroke={T.blue} strokeWidth={1.8} dot={<CustomDot/>}
+          activeDot={false} name={paramLabel} connectNulls isAnimationActive={false}/>
       </ComposedChart>
     </ResponsiveContainer>
-    <div style={{fontSize:9,color:T.textT,fontFamily:T.mono,textAlign:"center",marginTop:6}}>
-      💡 Klik dan drag pada grafik untuk zoom in
-    </div>
   </div>);
 }
-
 /* ══ WESTGARD PANEL ══ */
 function WestgardPanel({violations}){
   if(!violations||violations.length===0) return(
@@ -896,126 +889,109 @@ function SigmaPanel({param,ward,cfg,stats,onSigmaChange,paramLabel}){
   </div>);
 }
 
-/* ══ PBRTQC CHART COMPONENT (with zoom, proper Y domain) ══ */
+/* ══ PBRTQC CHART COMPONENT ══ */
 function PBRTQCChart({chartData, series, limits, selMethods, cfg, paramLabel, activeTx, param, wardKey}){
-  const[zLeft,setZLeft]=useState(null);
-  const[zRight,setZRight]=useState(null);
-  const[selecting,setSelecting]=useState(false);
-  const[xDomain,setXDomain]=useState(null);
-  const[isZoomed,setIsZoomed]=useState(false);
+  const n=chartData.length;
+  const[winStart,setWinStart]=useState(0);
+  const[winSize,setWinSize]=useState(Math.min(n,60));
+
+  const winEnd=Math.min(n, winStart+winSize);
+  const isZoomed=winSize<n;
+  const resetZoom=()=>{setWinStart(0);setWinSize(Math.min(n,60));};
 
   const iqcPts=useMemo(()=>getIQCOverlayPoints(param,wardKey),[param,wardKey]);
 
-  // Auto Y domain from data + limits
+  const displayData=useMemo(()=>chartData.slice(winStart,winEnd),[chartData,winStart,winEnd]);
+
   const yDomain=useMemo(()=>{
-    const allVals=chartData.flatMap(d=>[d.raw,...selMethods.filter(m=>series[m]).map(m=>d[m]).filter(Boolean)]);
-    const allLims=selMethods.filter(m=>limits[m]&&!isNaN(limits[m].ucl)).flatMap(m=>[limits[m].ucl,limits[m].lcl]);
+    const d=displayData.length?displayData:chartData;
+    const allVals=d.flatMap(pt=>[pt.raw,...selMethods.filter(m=>series?.[m]).map(m=>pt[m]).filter(v=>v!=null&&!isNaN(v))]);
+    const allLims=selMethods.filter(m=>limits?.[m]&&!isNaN(limits[m].ucl)).flatMap(m=>[limits[m].ucl,limits[m].lcl]);
     const allY=safeArr([...allVals,...allLims]);
-    if(!allY.length)return["auto","auto"];
-    const yMin=Math.min(...allY),yMax=Math.max(...allY);
-    const yPad=(yMax-yMin)*0.12||1;
-    return[+(yMin-yPad).toFixed(3),+(yMax+yPad).toFixed(3)];
-  },[chartData,selMethods,series,limits]);
+    if(allY.length<2)return["auto","auto"];
+    const lo=Math.min(...allY),hi=Math.max(...allY);
+    const pad=Math.max((hi-lo)*0.12,0.5);
+    return[+(lo-pad).toFixed(3),+(hi+pad).toFixed(3)];
+  },[displayData,chartData,selMethods,series,limits]);
 
-  const displayData=useMemo(()=>
-    xDomain?chartData.filter(d=>d.idx>=xDomain[0]&&d.idx<=xDomain[1]):chartData
-  ,[chartData,xDomain]);
-
-  const onMouseDown=e=>{if(!e?.activeLabel)return;setZLeft(e.activeLabel);setSelecting(true);};
-  const onMouseMove=e=>{if(!selecting||!e?.activeLabel)return;setZRight(e.activeLabel);};
-  const onMouseUp=()=>{
-    setSelecting(false);
-    if(zLeft!==null&&zRight!==null&&zLeft!==zRight){
-      const l=Math.min(zLeft,zRight),r=Math.max(zLeft,zRight);
-      if(r-l>=2){setXDomain([l,r]);setIsZoomed(true);}
-    }
-    setZLeft(null);setZRight(null);
-  };
-  const resetZoom=()=>{setXDomain(null);setIsZoomed(false);};
+  const firstMethod=selMethods.find(m=>series?.[m]&&limits?.[m]&&!isNaN(limits[m].ucl));
 
   const TT=({active,payload,label})=>{
     if(!active||!payload?.length)return null;
     return(<div style={{background:T.surface,border:`1.5px solid ${T.borderM}`,borderRadius:9,padding:"9px 13px",fontFamily:T.mono,fontSize:10,boxShadow:"0 4px 14px rgba(14,165,233,.08)"}}>
-      <div style={{color:T.textS,marginBottom:4}}>Pasien #{label}</div>
-      {payload.map(p=><div key={p.dataKey} style={{color:p.color||T.text,marginBottom:1}}>{p.dataKey}: {typeof p.value==="number"?p.value.toFixed(3):p.value}</div>)}
+      <div style={{color:T.textS,marginBottom:3}}>Pasien #{label}</div>
+      {payload.filter(p=>p.dataKey!=="raw"&&p.value!=null).map(p=>(
+        <div key={p.dataKey} style={{color:p.color||T.text,marginBottom:1}}>{p.name}: {typeof p.value==="number"?p.value.toFixed(3):p.value}</div>
+      ))}
     </div>);
   };
-
-  // Only show UCL/LCL label for the first active method to avoid clutter
-  const firstMethod=selMethods.find(m=>series[m]&&limits[m]&&!isNaN(limits[m].ucl));
 
   return(
     <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:16,padding:20,marginBottom:14,boxShadow:"0 2px 12px rgba(14,165,233,.06)"}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,flexWrap:"wrap",gap:8}}>
         <div>
           <div style={{fontSize:14,fontWeight:700,color:T.text,letterSpacing:-.2}}>
-            PBRTQC Control Chart{activeTx!=="none"&&<span style={{fontSize:10,color:T.blue,fontFamily:T.mono,marginLeft:8}}>[{transformLabel(activeTx)}]</span>}
+            PBRTQC Control Chart
+            {activeTx!=="none"&&<span style={{fontSize:10,color:T.blue,fontFamily:T.mono,marginLeft:8}}>[{transformLabel(activeTx)}]</span>}
           </div>
-          <div style={{fontSize:10,color:T.textT,fontFamily:T.mono,marginTop:2}}>{displayData.length} titik ditampilkan</div>
+          <div style={{fontSize:10,color:T.textT,fontFamily:T.mono,marginTop:2}}>{displayData.length} titik</div>
         </div>
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
-          {isZoomed&&<button onClick={resetZoom} style={{padding:"4px 12px",background:T.blueL,border:`1px solid ${T.blue}44`,borderRadius:8,color:T.blueD,fontSize:11,fontFamily:T.font,fontWeight:600,cursor:"pointer"}}>↩ Reset Zoom</button>}
-          <span style={{fontSize:9,color:T.textT,fontFamily:T.mono}}>{isZoomed?`#${xDomain[0]}–${xDomain[1]}`:"drag untuk zoom"}</span>
+          {isZoomed&&<button onClick={resetZoom} style={{padding:"4px 12px",background:T.blueL,border:`1px solid ${T.blue}44`,borderRadius:8,color:T.blueD,fontSize:11,fontFamily:T.font,fontWeight:600,cursor:"pointer"}}>↩ Semua</button>}
+          <span style={{fontSize:9,color:T.textT,fontFamily:T.mono}}>#{winStart+1}–{winEnd}</span>
         </div>
       </div>
 
+      {/* Zoom sliders */}
+      {n>20&&<div style={{display:"flex",gap:12,alignItems:"center",marginBottom:10,padding:"8px 12px",background:T.surfB,borderRadius:9,border:`1px solid ${T.border}`}}>
+        <span style={{fontSize:10,color:T.textT,fontFamily:T.mono,flexShrink:0}}>Window:</span>
+        <input type="range" min={10} max={n} step={5} value={winSize}
+          onChange={e=>{const s=+e.target.value;setWinSize(s);setWinStart(v=>Math.min(v,n-s));}}
+          style={{flex:1,accentColor:T.blue}}/>
+        <span style={{fontSize:10,color:T.blue,fontFamily:T.mono,flexShrink:0,width:60}}>{winSize} titik</span>
+        <input type="range" min={0} max={Math.max(0,n-winSize)} step={1} value={winStart}
+          onChange={e=>setWinStart(+e.target.value)}
+          style={{flex:1,accentColor:"#8b5cf6"}}/>
+        <span style={{fontSize:9,color:T.textT,fontFamily:T.mono,flexShrink:0}}>posisi</span>
+      </div>}
+
       <ResponsiveContainer width="100%" height={300}>
-        <LineChart data={displayData} margin={{top:4,right:52,bottom:14,left:8}}
-          onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp}
-          style={{cursor:selecting?"crosshair":"default"}}>
+        <LineChart data={displayData} margin={{top:4,right:52,bottom:14,left:8}}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(14,165,233,.06)"/>
           <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border}
-            type="number" allowDataOverflow domain={xDomain||["auto","auto"]}
             label={{value:"Urutan Pasien",position:"insideBottom",offset:-4,fill:T.textT,fontSize:9}}/>
           <YAxis tick={{fontSize:9,fill:T.textT}} stroke={T.border}
             domain={yDomain} allowDataOverflow tickCount={8}
             label={{value:activeTx!=="none"?"tx":cfg.unit,angle:-90,position:"insideLeft",fill:T.textT,fontSize:9,dx:-4}}/>
           <Tooltip content={<TT/>}/>
           <Legend wrapperStyle={{fontSize:10,paddingTop:8}}/>
-
-          {/* Raw data */}
           <Line dataKey="raw" stroke="rgba(14,165,233,.15)" dot={false} strokeWidth={1} name="Raw" legendType="none"/>
-
-          {/* Ref range lines — no label to reduce clutter */}
-          <ReferenceLine y={cfg.refHigh} stroke="#94a3b8" strokeDasharray="4 4" strokeOpacity={.4}/>
-          <ReferenceLine y={cfg.refLow} stroke="#94a3b8" strokeDasharray="4 4" strokeOpacity={.4}/>
-
-          {/* Method lines + only UCL/LCL for first method labeled */}
-          {selMethods.filter(m=>series[m]&&limits[m]&&!isNaN(limits[m].ucl)).map(m=>[
+          <ReferenceLine y={cfg.refHigh} stroke="#cbd5e1" strokeDasharray="4 4"/>
+          <ReferenceLine y={cfg.refLow} stroke="#cbd5e1" strokeDasharray="4 4"/>
+          {selMethods.filter(m=>series?.[m]&&limits?.[m]&&!isNaN(limits[m].ucl)).map(m=>[
             <Line key={m} dataKey={m} stroke={METHODS[m]?.color||"#888"} dot={false} strokeWidth={2}
               name={METHODS[m]?.label||m} connectNulls strokeDasharray={METHODS[m]?.dash||"none"}/>,
             <ReferenceLine key={m+"u"} y={limits[m].ucl} stroke={METHODS[m]?.color||"#888"}
-              strokeDasharray="2 5" strokeOpacity={.35}
-              label={m===firstMethod?{value:"UCL",fill:METHODS[m]?.color||"#888",fontSize:8,position:"right"}:undefined}/>,
+              strokeDasharray="2 5" strokeOpacity={.3}
+              label={m===firstMethod?{value:"UCL",fill:METHODS[m]?.color,fontSize:8,position:"right"}:null}/>,
             <ReferenceLine key={m+"l"} y={limits[m].lcl} stroke={METHODS[m]?.color||"#888"}
-              strokeDasharray="2 5" strokeOpacity={.35}
-              label={m===firstMethod?{value:"LCL",fill:METHODS[m]?.color||"#888",fontSize:8,position:"right"}:undefined}/>,
+              strokeDasharray="2 5" strokeOpacity={.3}
+              label={m===firstMethod?{value:"LCL",fill:METHODS[m]?.color,fontSize:8,position:"right"}:null}/>,
           ])}
-
-          {/* IQC overlay */}
-          {iqcPts.map((pt,i)=>(
-            <ReferenceLine key={"iq"+i} x={pt.idx} stroke={pt.color}
-              strokeWidth={1} strokeDasharray="2 4" strokeOpacity={0.6}
-              label={{value:"♦",fill:pt.color,fontSize:10,position:"top"}}/>
+          {iqcPts.filter(p=>p.idx>winStart&&p.idx<=winEnd).map((pt,i)=>(
+            <ReferenceLine key={"iq"+i} x={pt.idx} stroke={pt.color} strokeWidth={1.5} strokeDasharray="2 4" strokeOpacity={0.7}/>
           ))}
-
-          {/* Zoom selection box */}
-          {selecting&&zLeft!==null&&zRight!==null&&(
-            <ReferenceArea x1={zLeft} x2={zRight} fill={T.blue} fillOpacity={0.1} strokeOpacity={0.3}/>
-          )}
         </LineChart>
       </ResponsiveContainer>
 
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:6,flexWrap:"wrap",gap:6}}>
-        <div style={{fontSize:9,color:T.textT,fontFamily:T.mono}}>💡 Klik dan drag untuk zoom in</div>
-        {iqcPts.length>0&&<div style={{display:"flex",gap:6,fontSize:9,fontFamily:T.mono,color:T.textS}}>
-          <span style={{fontWeight:600,color:T.text}}>IQC:</span>
-          {[0,1,2].map(i=>{const pts=iqcPts.filter(p=>p.level===i);if(!pts.length)return null;return<span key={i} style={{color:["#0ea5e9","#10b981","#f59e0b"][i]}}>♦ L{i+1}({pts.length})</span>;})}
-        </div>}
-      </div>
+      {iqcPts.length>0&&<div style={{display:"flex",gap:6,fontSize:9,fontFamily:T.mono,color:T.textS,marginTop:6}}>
+        <span style={{fontWeight:600,color:T.text}}>IQC:</span>
+        {[0,1,2].map(i=>{const pts=iqcPts.filter(p=>p.level===i);if(!pts.length)return null;return<span key={i} style={{color:["#0ea5e9","#10b981","#f59e0b"][i]}}>♦ L{i+1}({pts.length})</span>;})}
+      </div>}
     </div>
   );
 }
+
 
 /* ══ MAIN QC PANEL ══ */
 function QCPanel({data,cfg,blockSize,mult,useAoN,selMethods,apiKey,wardKey,wardLabel,paramLabel,param,onSave}){
@@ -1044,9 +1020,12 @@ function QCPanel({data,cfg,blockSize,mult,useAoN,selMethods,apiKey,wardKey,wardL
   const ljSd=(txStats?.sd||stats?.sd)||1;
 
   // Sigma
-  const _init=(()=>{const sk=param+"_"+wardKey;const sv=loadSigmaSettings()[sk]||{};const t=sv.tea??cfg.tea??5.0;const b=sv.bias??0.5;const cv=sv.cvOverride?parseFloat(sv.cvOverride):3.0;const sig=+((t-Math.abs(b))/Math.max(cv,0.01)).toFixed(2);return{sig,tier:getSigmaTier(sig)};})();
-  const[sigmaCurrent,setSigmaCurrent]=useState(_init.sig);
-  const[sigmaTierCurrent,setSigmaTierCurrent]=useState(_init.tier);
+  const[sigmaCurrent,setSigmaCurrent]=useState(()=>{
+    try{const sk=param+"_"+wardKey;const sv=loadSigmaSettings()[sk]||{};const t=sv.tea??cfg.tea??5.0;const b=sv.bias??0.5;const cv=sv.cvOverride?parseFloat(sv.cvOverride):3.0;return+((t-Math.abs(b))/Math.max(cv,0.01)).toFixed(2);}catch{return 3.0;}
+  });
+  const[sigmaTierCurrent,setSigmaTierCurrent]=useState(()=>{
+    try{const sk=param+"_"+wardKey;const sv=loadSigmaSettings()[sk]||{};const t=sv.tea??cfg.tea??5.0;const b=sv.bias??0.5;const cv=sv.cvOverride?parseFloat(sv.cvOverride):3.0;const sig=+((t-Math.abs(b))/Math.max(cv,0.01)).toFixed(2);return getSigmaTier(sig);}catch{return getSigmaTier(3.0);}
+  });
   const handleSigmaChange=useCallback((sig,tier)=>{setSigmaCurrent(sig);setSigmaTierCurrent(tier);},[]);
 
   const wgViolations=useMemo(()=>(workData||working)?checkWestgard(workData||working,ljMean,ljSd,sigmaTierCurrent):[],[workData,working,ljMean,ljSd,sigmaTierCurrent]);
