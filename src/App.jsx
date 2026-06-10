@@ -279,27 +279,46 @@ function GroupSel({selected,onChange}){
 }
 
 /* ══ LEVEY-JENNINGS CHART ══ */
-function LJChart({values, mean, sdVal, paramLabel, wardLabel, unit, violations}){
+function LJChart({values, mean, sdVal, paramLabel, wardLabel, unit, violations, sigmaTier}){
   const violSet=new Set(violations.map(v=>v.idx));
   const rejectSet=new Set(violations.filter(v=>v.rules.some(r=>r.type==="reject")).map(v=>v.idx));
 
-  const data=values.map((v,i)=>{
-    const z=(v-mean)/sdVal;
-    return{idx:i+1,value:+v.toFixed(3),z:+z.toFixed(2),
-      p3sd:+(mean+3*sdVal).toFixed(3),p2sd:+(mean+2*sdVal).toFixed(3),p1sd:+(mean+1*sdVal).toFixed(3),
-      m3sd:+(mean-3*sdVal).toFixed(3),m2sd:+(mean-2*sdVal).toFixed(3),m1sd:+(mean-1*sdVal).toFixed(3),
-      mn:+mean.toFixed(3),
-      fill:rejectSet.has(i)?T.danger:violSet.has(i)?T.warn:T.ok,
-    };
-  });
+  // Zoom state
+  const[zLeft,setZLeft]=useState(null);
+  const[zRight,setZRight]=useState(null);
+  const[selecting,setSelecting]=useState(false);
+  const[xDomain,setXDomain]=useState([1,values.length]);
+  const[isZoomed,setIsZoomed]=useState(false);
+
+  // Auto Y: tight around data + SD lines with padding
+  const yPad=sdVal*0.7;
+  const dataMin=Math.min(...safeArr(values));
+  const dataMax=Math.max(...safeArr(values));
+  const yMin=Math.min(dataMin, mean-3*sdVal)-yPad;
+  const yMax=Math.max(dataMax, mean+3*sdVal)+yPad;
+  const yDomain=[+yMin.toFixed(3),+yMax.toFixed(3)];
+
+  const fullData=values.map((v,i)=>({idx:i+1,value:+v.toFixed(3),z:+((v-mean)/sdVal).toFixed(2)}));
+  const displayData=fullData.filter(d=>d.idx>=xDomain[0]&&d.idx<=xDomain[1]);
+
+  const onMouseDown=e=>{if(!e?.activeLabel)return;setZLeft(e.activeLabel);setSelecting(true);};
+  const onMouseMove=e=>{if(!selecting||!e?.activeLabel)return;setZRight(e.activeLabel);};
+  const onMouseUp=()=>{
+    setSelecting(false);
+    if(zLeft!==null&&zRight!==null&&zLeft!==zRight){
+      const l=Math.min(zLeft,zRight),r=Math.max(zLeft,zRight);
+      if(r-l>=2){setXDomain([l,r]);setIsZoomed(true);}
+    }
+    setZLeft(null);setZRight(null);
+  };
+  const resetZoom=()=>{setXDomain([1,values.length]);setIsZoomed(false);};
 
   const CustomDot=(props)=>{
     const{cx,cy,payload}=props;
     if(cx==null||cy==null)return null;
-    const isViol=violSet.has(payload.idx-1);
-    const isRej=rejectSet.has(payload.idx-1);
-    const color=isRej?T.danger:isViol?T.warn:T.blue;
-    const r=isRej?6:isViol?5:3.5;
+    const idx=payload.idx-1;
+    const color=rejectSet.has(idx)?T.danger:violSet.has(idx)?T.warn:T.ok;
+    const r=rejectSet.has(idx)?6:violSet.has(idx)?5:3.5;
     return<circle cx={cx} cy={cy} r={r} fill={color} stroke="#fff" strokeWidth={1.5}/>;
   };
 
@@ -317,37 +336,51 @@ function LJChart({values, mean, sdVal, paramLabel, wardLabel, unit, violations})
     </div>);
   };
 
-  return(<div style={{...CS,padding:20}}>
-    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+  return(<div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:16,padding:20,boxShadow:"0 2px 12px rgba(14,165,233,.06)"}}>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,flexWrap:"wrap",gap:8}}>
       <div>
-        <div style={{fontSize:13,fontWeight:600,color:T.text}}>Levey-Jennings Chart — {paramLabel}</div>
-        <div style={{fontSize:10,color:T.textT,fontFamily:T.mono}}>{wardLabel} · n={values.length} · Mean={mean.toFixed(3)} · SD={sdVal.toFixed(3)}</div>
+        <div style={{fontSize:14,fontWeight:700,color:T.text,letterSpacing:-.2}}>Levey-Jennings Chart</div>
+        <div style={{fontSize:10,color:T.textT,fontFamily:T.mono,marginTop:2}}>{wardLabel} · n={values.length} · Mean={mean.toFixed(3)} · SD={sdVal.toFixed(3)}</div>
       </div>
-      <div style={{display:"flex",gap:8,alignItems:"center",fontSize:10,fontFamily:T.mono}}>
-        <span style={{color:T.ok}}>● Normal</span>
-        <span style={{color:T.warn}}>● Warning</span>
-        <span style={{color:T.danger}}>● Reject</span>
+      <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+        <div style={{display:"flex",gap:8,fontSize:11,fontFamily:T.mono}}>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:8,height:8,borderRadius:"50%",background:T.ok,display:"inline-block"}}/> Normal</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:8,height:8,borderRadius:"50%",background:T.warn,display:"inline-block"}}/> Warning</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:8,height:8,borderRadius:"50%",background:T.danger,display:"inline-block"}}/> Reject</span>
+        </div>
+        {isZoomed&&<button onClick={resetZoom} style={{padding:"4px 12px",background:T.blueL,border:`1px solid ${T.blue}44`,borderRadius:8,color:T.blueD,fontSize:11,fontFamily:T.font,fontWeight:600,cursor:"pointer"}}>↩ Reset Zoom</button>}
+        <span style={{fontSize:9,color:T.textT,fontFamily:T.mono}}>{isZoomed?`#${xDomain[0]}–${xDomain[1]}`:"drag untuk zoom"}</span>
       </div>
     </div>
-    <ResponsiveContainer width="100%" height={300}>
-      <ComposedChart data={data} margin={{top:8,right:14,bottom:14,left:0}}>
-        <CartesianGrid strokeDasharray="3 3" stroke="rgba(14,165,233,.07)"/>
-        <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border} label={{value:"Urutan",position:"insideBottom",offset:-4,fill:T.textT,fontSize:9}}/>
-        <YAxis tick={{fontSize:9,fill:T.textT}} stroke={T.border} label={{value:unit,angle:-90,position:"insideLeft",fill:T.textT,fontSize:9}}/>
+    <ResponsiveContainer width="100%" height={320}>
+      <ComposedChart data={displayData} margin={{top:8,right:52,bottom:14,left:8}}
+        onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp}
+        style={{cursor:selecting?"crosshair":"default"}}>
+        <CartesianGrid strokeDasharray="3 3" stroke="rgba(14,165,233,.06)"/>
+        <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border} type="number"
+          domain={[xDomain[0],xDomain[1]]} allowDataOverflow
+          label={{value:"Urutan Pasien",position:"insideBottom",offset:-4,fill:T.textT,fontSize:9}}/>
+        <YAxis tick={{fontSize:9,fill:T.textT}} stroke={T.border}
+          domain={yDomain} allowDataOverflow tickCount={9}
+          label={{value:unit,angle:-90,position:"insideLeft",fill:T.textT,fontSize:9,dx:-4}}/>
         <Tooltip content={<TT/>}/>
-
-        {/* SD zone fills via reference lines */}
-        <ReferenceLine y={mean+3*sdVal} stroke={T.danger} strokeWidth={1.5} strokeDasharray="4 3" label={{value:"+3SD",fill:T.danger,fontSize:8,position:"insideTopRight"}}/>
-        <ReferenceLine y={mean+2*sdVal} stroke={T.warn} strokeWidth={1.2} strokeDasharray="4 3" label={{value:"+2SD",fill:T.warn,fontSize:8,position:"insideTopRight"}}/>
-        <ReferenceLine y={mean+sdVal} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3 3" label={{value:"+1SD",fill:T.textT,fontSize:8,position:"insideTopRight"}}/>
-        <ReferenceLine y={mean} stroke={T.blue} strokeWidth={1.5} label={{value:"Mean",fill:T.blue,fontSize:8,position:"insideTopRight"}}/>
-        <ReferenceLine y={mean-sdVal} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3 3" label={{value:"-1SD",fill:T.textT,fontSize:8,position:"insideBottomRight"}}/>
-        <ReferenceLine y={mean-2*sdVal} stroke={T.warn} strokeWidth={1.2} strokeDasharray="4 3" label={{value:"-2SD",fill:T.warn,fontSize:8,position:"insideBottomRight"}}/>
-        <ReferenceLine y={mean-3*sdVal} stroke={T.danger} strokeWidth={1.5} strokeDasharray="4 3" label={{value:"-3SD",fill:T.danger,fontSize:8,position:"insideBottomRight"}}/>
-
-        <Line dataKey="value" stroke={T.blue} strokeWidth={1.5} dot={<CustomDot/>} activeDot={false} name={paramLabel} connectNulls isAnimationActive={false}/>
+        <ReferenceLine y={mean+3*sdVal} stroke={T.danger} strokeWidth={1.5} strokeDasharray="5 3" label={{value:"+3SD",fill:T.danger,fontSize:8,position:"right"}}/>
+        <ReferenceLine y={mean+2*sdVal} stroke={T.warn} strokeWidth={1.2} strokeDasharray="5 3" label={{value:"+2SD",fill:T.warn,fontSize:8,position:"right"}}/>
+        <ReferenceLine y={mean+sdVal} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3 4" label={{value:"+1SD",fill:T.textT,fontSize:8,position:"right"}}/>
+        <ReferenceLine y={mean} stroke={T.blue} strokeWidth={2} label={{value:"Mean",fill:T.blue,fontSize:8,position:"right"}}/>
+        <ReferenceLine y={mean-sdVal} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3 4" label={{value:"-1SD",fill:T.textT,fontSize:8,position:"right"}}/>
+        <ReferenceLine y={mean-2*sdVal} stroke={T.warn} strokeWidth={1.2} strokeDasharray="5 3" label={{value:"-2SD",fill:T.warn,fontSize:8,position:"right"}}/>
+        <ReferenceLine y={mean-3*sdVal} stroke={T.danger} strokeWidth={1.5} strokeDasharray="5 3" label={{value:"-3SD",fill:T.danger,fontSize:8,position:"right"}}/>
+        {selecting&&zLeft!==null&&zRight!==null&&(
+          <ReferenceArea x1={zLeft} x2={zRight} fill={T.blue} fillOpacity={0.1} strokeOpacity={0.3}/>
+        )}
+        <Line dataKey="value" stroke={T.blue} strokeWidth={1.8} dot={<CustomDot/>} activeDot={false}
+          name={paramLabel} connectNulls isAnimationActive={false}/>
       </ComposedChart>
     </ResponsiveContainer>
+    <div style={{fontSize:9,color:T.textT,fontFamily:T.mono,textAlign:"center",marginTop:6}}>
+      💡 Klik dan drag pada grafik untuk zoom in
+    </div>
   </div>);
 }
 
@@ -1608,32 +1641,58 @@ export default function PasienQuC(){
 
     <div style={{padding:"18px 24px"}}>
 
-      {/* GLOBAL CONTROLS */}
-      <div className="fu" style={{...CS,padding:15,marginBottom:15}}>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:11}}>
-          <div><div style={LS}>Kelompok Parameter</div><GroupSel selected={group} onChange={setGroup}/></div>
-          <div><div style={LS}>Parameter</div><select value={param} onChange={e=>setParam(e.target.value)} style={SS}>{Object.entries(PARAM_GROUPS[group]?.params||{}).map(([k,v])=><option key={k} value={k}>{v.label} ({v.unit})</option>)}</select></div>
-        </div>
-        <div style={{marginBottom:11}}><div style={LS}>Ruang Perawatan</div><WardSel selected={selWards} onChange={setSelWards} multi={true}/></div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:10}}>
-          <div><div style={LS}>Tampilan</div><select value={viewMode} onChange={e=>setViewMode(e.target.value)} style={SS}><option value="single">Per Ruangan</option><option value="combined">Gabungan</option><option value="compare">Perbandingan</option></select></div>
-          <div><div style={LS}>Block Size (n)</div><input type="number" min={5} max={100} value={blockSize} onChange={e=>setBlockSize(+e.target.value)} style={IS}/></div>
-          <div><div style={LS}>Control Limit</div><select value={mult} onChange={e=>setMult(+e.target.value)} style={SS}>{[1.5,2,2.5,3].map(v=><option key={v} value={v}>± {v} SD</option>)}</select></div>
-          <div><div style={LS}>AoN Filter</div>
-            <div style={{display:"flex",alignItems:"center",gap:7,marginTop:7}}>
-              <div className="tog" onClick={()=>setUseAoN(!useAoN)} style={{width:36,height:20,borderRadius:10,background:useAoN?T.blue:"#cbd5e1",position:"relative"}}><div style={{position:"absolute",top:2,left:useAoN?17:2,width:16,height:16,borderRadius:"50%",background:"#fff",transition:"left .2s",boxShadow:"0 1px 3px rgba(0,0,0,.12)"}}/></div>
-              <span style={{fontSize:11,color:useAoN?T.blue:T.textT}}>{useAoN?"Aktif":"Nonaktif"}</span>
-            </div>
-            <div style={{fontSize:9,color:T.textT,fontFamily:T.mono,marginTop:2}}>{cfg?.refLow}–{cfg?.refHigh} {cfg?.unit}</div>
-          </div>
-        </div>
-        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-          {Object.entries(METHODS).map(([k,v])=>{const on=selMethods.includes(k);return(<div key={k} className="pill" onClick={()=>toggleMethod(k)} style={{padding:"4px 11px",borderRadius:20,border:`1.5px solid ${on?v.color:T.border}`,background:on?v.color+"10":"transparent",color:on?v.color:T.textS,fontSize:11,fontWeight:on?600:400}}><span style={{display:"inline-block",width:6,height:6,borderRadius:"50%",background:on?v.color:T.border,marginRight:4,verticalAlign:"middle"}}/>{v.label}</div>);})}
-        </div>
-      </div>
-
       {/* DASHBOARD */}
       {tab==="dashboard"&&<div className="fi">
+
+      {/* GLOBAL CONTROLS — dashboard only */}
+      <div className="fu" style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:16,padding:20,marginBottom:18,boxShadow:"0 1px 8px rgba(14,165,233,.06)"}}>
+        {/* Row 1: Param group + param */}
+        <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:20,marginBottom:14,alignItems:"start"}}>
+          <div>
+            <div style={{fontSize:10,letterSpacing:2,textTransform:"uppercase",color:T.textT,fontFamily:T.mono,marginBottom:8}}>Kelompok Parameter</div>
+            <GroupSel selected={group} onChange={setGroup}/>
+          </div>
+          <div>
+            <div style={{fontSize:10,letterSpacing:2,textTransform:"uppercase",color:T.textT,fontFamily:T.mono,marginBottom:8}}>Parameter</div>
+            <select value={param} onChange={e=>setParam(e.target.value)} style={{...SS,maxWidth:320}}>{Object.entries(PARAM_GROUPS[group]?.params||{}).map(([k,v])=><option key={k} value={k}>{v.label} ({v.unit})</option>)}</select>
+          </div>
+        </div>
+        {/* Row 2: Wards */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:10,letterSpacing:2,textTransform:"uppercase",color:T.textT,fontFamily:T.mono,marginBottom:8}}>Ruang Perawatan</div>
+          <WardSel selected={selWards} onChange={setSelWards} multi={true}/>
+        </div>
+        {/* Row 3: Settings + methods */}
+        <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}>
+          <div style={{minWidth:140}}>
+            <div style={{fontSize:10,letterSpacing:2,textTransform:"uppercase",color:T.textT,fontFamily:T.mono,marginBottom:6}}>Tampilan</div>
+            <select value={viewMode} onChange={e=>setViewMode(e.target.value)} style={SS}>
+              <option value="single">Per Ruangan</option>
+              <option value="combined">Gabungan</option>
+              <option value="compare">Perbandingan</option>
+            </select>
+          </div>
+          <div style={{minWidth:90}}>
+            <div style={{fontSize:10,letterSpacing:2,textTransform:"uppercase",color:T.textT,fontFamily:T.mono,marginBottom:6}}>Block Size</div>
+            <input type="number" min={5} max={100} value={blockSize} onChange={e=>setBlockSize(+e.target.value)} style={{...IS,width:90}}/>
+          </div>
+          <div style={{minWidth:110}}>
+            <div style={{fontSize:10,letterSpacing:2,textTransform:"uppercase",color:T.textT,fontFamily:T.mono,marginBottom:6}}>Control Limit</div>
+            <select value={mult} onChange={e=>setMult(+e.target.value)} style={{...SS,width:110}}>{[1.5,2,2.5,3].map(v=><option key={v} value={v}>± {v} SD</option>)}</select>
+          </div>
+          <div>
+            <div style={{fontSize:10,letterSpacing:2,textTransform:"uppercase",color:T.textT,fontFamily:T.mono,marginBottom:6}}>AoN</div>
+            <div style={{display:"flex",alignItems:"center",gap:7,height:36}}>
+              <div className="tog" onClick={()=>setUseAoN(!useAoN)} style={{width:36,height:20,borderRadius:10,background:useAoN?T.blue:"#cbd5e1",position:"relative",flexShrink:0}}><div style={{position:"absolute",top:2,left:useAoN?17:2,width:16,height:16,borderRadius:"50%",background:"#fff",transition:"left .2s"}}/></div>
+              <span style={{fontSize:11,color:useAoN?T.blue:T.textT,whiteSpace:"nowrap"}}>{useAoN?"Aktif":"Off"}</span>
+            </div>
+          </div>
+          {/* Method pills inline */}
+          <div style={{flex:1,display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",paddingBottom:2}}>
+            {Object.entries(METHODS).map(([k,v])=>{const on=selMethods.includes(k);return(<div key={k} className="pill" onClick={()=>toggleMethod(k)} style={{padding:"5px 12px",borderRadius:20,border:`1.5px solid ${on?v.color:T.border}`,background:on?v.color+"10":"transparent",color:on?v.color:T.textS,fontSize:11,fontWeight:on?600:400,display:"flex",alignItems:"center",gap:5}}><span style={{width:7,height:7,borderRadius:"50%",background:on?v.color:T.border,display:"inline-block",flexShrink:0}}/>{v.label}</div>);})}
+          </div>
+        </div>
+      </div>
         {viewMode==="single"&&<div>
           {selWards.length===0&&<div style={{...CS,padding:26,textAlign:"center",color:T.textS}}>Pilih minimal satu ruang perawatan.</div>}
           {selWards.map(w=>{const raw=getWardRaw(w);return(<div key={w} style={{marginBottom:20}}>
