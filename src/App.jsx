@@ -896,6 +896,127 @@ function SigmaPanel({param,ward,cfg,stats,onSigmaChange,paramLabel}){
   </div>);
 }
 
+/* ══ PBRTQC CHART COMPONENT (with zoom, proper Y domain) ══ */
+function PBRTQCChart({chartData, series, limits, selMethods, cfg, paramLabel, activeTx, param, wardKey}){
+  const[zLeft,setZLeft]=useState(null);
+  const[zRight,setZRight]=useState(null);
+  const[selecting,setSelecting]=useState(false);
+  const[xDomain,setXDomain]=useState(null);
+  const[isZoomed,setIsZoomed]=useState(false);
+
+  const iqcPts=useMemo(()=>getIQCOverlayPoints(param,wardKey),[param,wardKey]);
+
+  // Auto Y domain from data + limits
+  const yDomain=useMemo(()=>{
+    const allVals=chartData.flatMap(d=>[d.raw,...selMethods.filter(m=>series[m]).map(m=>d[m]).filter(Boolean)]);
+    const allLims=selMethods.filter(m=>limits[m]&&!isNaN(limits[m].ucl)).flatMap(m=>[limits[m].ucl,limits[m].lcl]);
+    const allY=safeArr([...allVals,...allLims]);
+    if(!allY.length)return["auto","auto"];
+    const yMin=Math.min(...allY),yMax=Math.max(...allY);
+    const yPad=(yMax-yMin)*0.12||1;
+    return[+(yMin-yPad).toFixed(3),+(yMax+yPad).toFixed(3)];
+  },[chartData,selMethods,series,limits]);
+
+  const displayData=useMemo(()=>
+    xDomain?chartData.filter(d=>d.idx>=xDomain[0]&&d.idx<=xDomain[1]):chartData
+  ,[chartData,xDomain]);
+
+  const onMouseDown=e=>{if(!e?.activeLabel)return;setZLeft(e.activeLabel);setSelecting(true);};
+  const onMouseMove=e=>{if(!selecting||!e?.activeLabel)return;setZRight(e.activeLabel);};
+  const onMouseUp=()=>{
+    setSelecting(false);
+    if(zLeft!==null&&zRight!==null&&zLeft!==zRight){
+      const l=Math.min(zLeft,zRight),r=Math.max(zLeft,zRight);
+      if(r-l>=2){setXDomain([l,r]);setIsZoomed(true);}
+    }
+    setZLeft(null);setZRight(null);
+  };
+  const resetZoom=()=>{setXDomain(null);setIsZoomed(false);};
+
+  const TT=({active,payload,label})=>{
+    if(!active||!payload?.length)return null;
+    return(<div style={{background:T.surface,border:`1.5px solid ${T.borderM}`,borderRadius:9,padding:"9px 13px",fontFamily:T.mono,fontSize:10,boxShadow:"0 4px 14px rgba(14,165,233,.08)"}}>
+      <div style={{color:T.textS,marginBottom:4}}>Pasien #{label}</div>
+      {payload.map(p=><div key={p.dataKey} style={{color:p.color||T.text,marginBottom:1}}>{p.dataKey}: {typeof p.value==="number"?p.value.toFixed(3):p.value}</div>)}
+    </div>);
+  };
+
+  // Only show UCL/LCL label for the first active method to avoid clutter
+  const firstMethod=selMethods.find(m=>series[m]&&limits[m]&&!isNaN(limits[m].ucl));
+
+  return(
+    <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:16,padding:20,marginBottom:14,boxShadow:"0 2px 12px rgba(14,165,233,.06)"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,flexWrap:"wrap",gap:8}}>
+        <div>
+          <div style={{fontSize:14,fontWeight:700,color:T.text,letterSpacing:-.2}}>
+            PBRTQC Control Chart{activeTx!=="none"&&<span style={{fontSize:10,color:T.blue,fontFamily:T.mono,marginLeft:8}}>[{transformLabel(activeTx)}]</span>}
+          </div>
+          <div style={{fontSize:10,color:T.textT,fontFamily:T.mono,marginTop:2}}>{displayData.length} titik ditampilkan</div>
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          {isZoomed&&<button onClick={resetZoom} style={{padding:"4px 12px",background:T.blueL,border:`1px solid ${T.blue}44`,borderRadius:8,color:T.blueD,fontSize:11,fontFamily:T.font,fontWeight:600,cursor:"pointer"}}>↩ Reset Zoom</button>}
+          <span style={{fontSize:9,color:T.textT,fontFamily:T.mono}}>{isZoomed?`#${xDomain[0]}–${xDomain[1]}`:"drag untuk zoom"}</span>
+        </div>
+      </div>
+
+      <ResponsiveContainer width="100%" height={300}>
+        <LineChart data={displayData} margin={{top:4,right:52,bottom:14,left:8}}
+          onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp}
+          style={{cursor:selecting?"crosshair":"default"}}>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(14,165,233,.06)"/>
+          <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border}
+            type="number" allowDataOverflow domain={xDomain||["auto","auto"]}
+            label={{value:"Urutan Pasien",position:"insideBottom",offset:-4,fill:T.textT,fontSize:9}}/>
+          <YAxis tick={{fontSize:9,fill:T.textT}} stroke={T.border}
+            domain={yDomain} allowDataOverflow tickCount={8}
+            label={{value:activeTx!=="none"?"tx":cfg.unit,angle:-90,position:"insideLeft",fill:T.textT,fontSize:9,dx:-4}}/>
+          <Tooltip content={<TT/>}/>
+          <Legend wrapperStyle={{fontSize:10,paddingTop:8}}/>
+
+          {/* Raw data */}
+          <Line dataKey="raw" stroke="rgba(14,165,233,.15)" dot={false} strokeWidth={1} name="Raw" legendType="none"/>
+
+          {/* Ref range lines — no label to reduce clutter */}
+          <ReferenceLine y={cfg.refHigh} stroke="#94a3b8" strokeDasharray="4 4" strokeOpacity={.4}/>
+          <ReferenceLine y={cfg.refLow} stroke="#94a3b8" strokeDasharray="4 4" strokeOpacity={.4}/>
+
+          {/* Method lines + only UCL/LCL for first method labeled */}
+          {selMethods.filter(m=>series[m]&&limits[m]&&!isNaN(limits[m].ucl)).map(m=>[
+            <Line key={m} dataKey={m} stroke={METHODS[m]?.color||"#888"} dot={false} strokeWidth={2}
+              name={METHODS[m]?.label||m} connectNulls strokeDasharray={METHODS[m]?.dash||"none"}/>,
+            <ReferenceLine key={m+"u"} y={limits[m].ucl} stroke={METHODS[m]?.color||"#888"}
+              strokeDasharray="2 5" strokeOpacity={.35}
+              label={m===firstMethod?{value:"UCL",fill:METHODS[m]?.color||"#888",fontSize:8,position:"right"}:undefined}/>,
+            <ReferenceLine key={m+"l"} y={limits[m].lcl} stroke={METHODS[m]?.color||"#888"}
+              strokeDasharray="2 5" strokeOpacity={.35}
+              label={m===firstMethod?{value:"LCL",fill:METHODS[m]?.color||"#888",fontSize:8,position:"right"}:undefined}/>,
+          ])}
+
+          {/* IQC overlay */}
+          {iqcPts.map((pt,i)=>(
+            <ReferenceLine key={"iq"+i} x={pt.idx} stroke={pt.color}
+              strokeWidth={1} strokeDasharray="2 4" strokeOpacity={0.6}
+              label={{value:"♦",fill:pt.color,fontSize:10,position:"top"}}/>
+          ))}
+
+          {/* Zoom selection box */}
+          {selecting&&zLeft!==null&&zRight!==null&&(
+            <ReferenceArea x1={zLeft} x2={zRight} fill={T.blue} fillOpacity={0.1} strokeOpacity={0.3}/>
+          )}
+        </LineChart>
+      </ResponsiveContainer>
+
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:6,flexWrap:"wrap",gap:6}}>
+        <div style={{fontSize:9,color:T.textT,fontFamily:T.mono}}>💡 Klik dan drag untuk zoom in</div>
+        {iqcPts.length>0&&<div style={{display:"flex",gap:6,fontSize:9,fontFamily:T.mono,color:T.textS}}>
+          <span style={{fontWeight:600,color:T.text}}>IQC:</span>
+          {[0,1,2].map(i=>{const pts=iqcPts.filter(p=>p.level===i);if(!pts.length)return null;return<span key={i} style={{color:["#0ea5e9","#10b981","#f59e0b"][i]}}>♦ L{i+1}({pts.length})</span>;})}
+        </div>}
+      </div>
+    </div>
+  );
+}
+
 /* ══ MAIN QC PANEL ══ */
 function QCPanel({data,cfg,blockSize,mult,useAoN,selMethods,apiKey,wardKey,wardLabel,paramLabel,param,onSave}){
   const working=useMemo(()=>!data?null:useAoN?data.filter(v=>v>=cfg.refLow&&v<=cfg.refHigh):data,[data,useAoN,cfg]);
@@ -985,41 +1106,9 @@ function QCPanel({data,cfg,blockSize,mult,useAoN,selMethods,apiKey,wardKey,wardL
     {stats&&<div style={{marginBottom:14}}><LJChart values={workData||working} mean={ljMean} sdVal={ljSd} paramLabel={paramLabel+(activeTx!=="none"?" ["+transformLabel(activeTx)+"]":"")} wardLabel={wardLabel} unit={activeTx!=="none"?"tx":cfg.unit} violations={wgViolations} sigmaTier={sigmaTierCurrent}/></div>}
 
     {/* PBRTQC Chart */}
-    {chartData.length>0&&series&&limits&&(()=>{
-      const allVals=chartData.flatMap(d=>[d.raw,...selMethods.filter(m=>series[m]).map(m=>d[m]).filter(Boolean)]);
-      const allLims=selMethods.filter(m=>limits[m]&&!isNaN(limits[m].ucl)).flatMap(m=>[limits[m].ucl,limits[m].lcl]);
-      const allY=safeArr([...allVals,...allLims]);
-      const yMin=allY.length?Math.min(...allY):0;const yMax=allY.length?Math.max(...allY):1;
-      const yPad=(yMax-yMin)*0.12||1;
-      const yDom=[+(yMin-yPad).toFixed(3),+(yMax+yPad).toFixed(3)];
-      const iqcPts=getIQCOverlayPoints(param,wardKey);
-      return(<div style={{...CS,padding:18,marginBottom:14}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-          <div style={{fontSize:13,fontWeight:600,color:T.text}}>PBRTQC Control Chart — {paramLabel}{activeTx!=="none"&&<span style={{fontSize:10,color:T.blue,fontFamily:T.mono,marginLeft:8}}>[{transformLabel(activeTx)}]</span>}</div>
-        </div>
-        <ResponsiveContainer width="100%" height={270}>
-          <LineChart data={chartData} margin={{top:4,right:48,bottom:12,left:8}}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(14,165,233,.07)"/>
-            <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border}/>
-            <YAxis tick={{fontSize:9,fill:T.textT}} stroke={T.border} domain={yDom} allowDataOverflow label={{value:activeTx!=="none"?"tx":cfg.unit,angle:-90,position:"insideLeft",fill:T.textT,fontSize:9,dx:-4}}/>
-            <Tooltip content={<TT/>}/><Legend wrapperStyle={{fontSize:10,paddingTop:5}}/>
-            <Line dataKey="raw" stroke="rgba(14,165,233,.14)" dot={false} strokeWidth={1} name="Raw" legendType="none"/>
-            <ReferenceLine y={cfg.refHigh} stroke={T.textT} strokeDasharray="4 4" strokeOpacity={.35} label={{value:"Ref↑",fill:T.textT,fontSize:8,position:"right"}}/>
-            <ReferenceLine y={cfg.refLow} stroke={T.textT} strokeDasharray="4 4" strokeOpacity={.35} label={{value:"Ref↓",fill:T.textT,fontSize:8,position:"right"}}/>
-            {selMethods.filter(m=>series[m]&&limits[m]&&!isNaN(limits[m].ucl)).map(m=>[
-              <Line key={m} dataKey={m} stroke={METHODS[m]?.color||"#888"} dot={false} strokeWidth={2} name={METHODS[m]?.label||m} connectNulls strokeDasharray={METHODS[m]?.dash||"none"}/>,
-              <ReferenceLine key={m+"u"} y={limits[m].ucl} stroke={METHODS[m]?.color||"#888"} strokeDasharray="2 5" strokeOpacity={.3} label={{value:"UCL",fill:METHODS[m]?.color||"#888",fontSize:7,position:"right"}}/>,
-              <ReferenceLine key={m+"l"} y={limits[m].lcl} stroke={METHODS[m]?.color||"#888"} strokeDasharray="2 5" strokeOpacity={.3} label={{value:"LCL",fill:METHODS[m]?.color||"#888",fontSize:7,position:"right"}}/>,
-            ])}
-            {iqcPts.map((pt,i)=><ReferenceLine key={"iq"+i} x={pt.idx} stroke={pt.color} strokeWidth={1} strokeDasharray="2 4" strokeOpacity={0.65} label={{value:"♦",fill:pt.color,fontSize:10,position:"top"}}/>)}
-          </LineChart>
-        </ResponsiveContainer>
-        {iqcPts.length>0&&<div style={{display:"flex",gap:7,flexWrap:"wrap",marginTop:6,padding:"4px 9px",background:T.surfB,borderRadius:7,fontSize:9,fontFamily:T.mono,color:T.textS}}>
-          <span style={{fontWeight:600,color:T.text}}>IQC Overlay:</span>
-          {[0,1,2].map(i=>{const pts=iqcPts.filter(p=>p.level===i);if(!pts.length)return null;return<span key={i} style={{color:["#0ea5e9","#10b981","#f59e0b"][i]}}>♦ L{i+1}({pts.length})</span>;})}
-        </div>}
-      </div>);
-    })()}
+    {chartData.length>0&&series&&limits&&(
+      <PBRTQCChart chartData={chartData} series={series} limits={limits} selMethods={selMethods} cfg={cfg} paramLabel={paramLabel} activeTx={activeTx} param={param} wardKey={wardKey}/>
+    )}
 
     {/* IQC Panel */}
     <IQCPanel param={param} ward={wardKey} wardLabel={wardLabel} paramLabel={paramLabel} cfg={cfg} sigmaTierCurrent={sigmaTierCurrent}/>
