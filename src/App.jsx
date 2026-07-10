@@ -1,42 +1,10 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  ReferenceLine, ResponsiveContainer, BarChart, Bar, ComposedChart, Scatter
+  ReferenceLine, ResponsiveContainer, BarChart, Bar
 } from "recharts";
 
-/* ─── Fonts ─── */
-(() => { const l=document.createElement("link");l.rel="stylesheet";l.href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,600;9..40,700&family=DM+Mono:wght@400;500&display=swap";document.head.appendChild(l); })();
-
-/* ─── CSS ─── */
-(() => { const s=document.createElement("style");s.textContent=`
-*{box-sizing:border-box;}
-@keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
-@keyframes fadeIn{from{opacity:0}to{opacity:1}}
-@keyframes spin{to{transform:rotate(360deg)}}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-@keyframes slideIn{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:translateX(0)}}
-@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
-.fu{animation:fadeUp .42s cubic-bezier(.22,1,.36,1) both}
-.fi{animation:fadeIn .32s ease both}
-.si{animation:slideIn .28s ease both}
-.ch{transition:box-shadow .2s,transform .2s}
-.ch:hover{box-shadow:0 8px 26px rgba(14,165,233,.11);transform:translateY(-2px)}
-.tb{transition:all .15s;cursor:pointer}.tb:hover{background:rgba(14,165,233,.07)!important}
-.pill{transition:all .13s;cursor:pointer}.pill:hover{transform:scale(1.03)}
-.pb{transition:all .15s;cursor:pointer}.pb:hover{transform:translateY(-1px);box-shadow:0 5px 16px rgba(14,165,233,.25)}.pb:active{transform:translateY(0)}
-.sb{transition:all .13s;cursor:pointer}.sb:hover{background:rgba(14,165,233,.06)!important}
-.tog{transition:background .18s;cursor:pointer}
-.wt{transition:all .13s;cursor:pointer}.wt:hover{transform:scale(1.03)}
-.spin{animation:spin .8s linear infinite}
-.pt{animation:pulse 1.5s ease infinite}
-.bl{animation:blink 1s step-end infinite}
-input:focus,select:focus,textarea:focus{outline:none;border-color:#0ea5e9!important}
-::-webkit-scrollbar{width:5px;height:5px}
-::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:rgba(14,165,233,.2);border-radius:10px}
-.cb{line-height:1.68;white-space:pre-wrap;word-break:break-word}
-table{border-collapse:collapse;width:100%}
-`;document.head.appendChild(s); })();
+/* Fonts & CSS global → dipindah ke index.html (native <link>/<style>) */
 
 /* ══ TOKENS ══ */
 const T={
@@ -356,7 +324,7 @@ function LJChart({values, mean, sdVal, paramLabel, wardLabel, unit, violations, 
     </div>}
 
     <ResponsiveContainer width="100%" height={310}>
-      <ComposedChart data={displayData} margin={{top:8,right:52,bottom:14,left:8}}>
+      <LineChart data={displayData} margin={{top:8,right:52,bottom:14,left:8}}>
         <CartesianGrid strokeDasharray="3 3" stroke="rgba(14,165,233,.06)"/>
         <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border}
           label={{value:"Urutan Pasien",position:"insideBottom",offset:-4,fill:T.textT,fontSize:9}}/>
@@ -373,7 +341,7 @@ function LJChart({values, mean, sdVal, paramLabel, wardLabel, unit, violations, 
         <ReferenceLine y={mean-3*sdVal} stroke={T.danger} strokeWidth={1.5} strokeDasharray="5 3" label={{value:"-3SD",fill:T.danger,fontSize:8,position:"right"}}/>
         <Line dataKey="value" stroke={T.blue} strokeWidth={1.8} dot={<CustomDot/>}
           activeDot={false} name={paramLabel} connectNulls isAnimationActive={false}/>
-      </ComposedChart>
+      </LineChart>
     </ResponsiveContainer>
   </div>);
 }
@@ -752,7 +720,7 @@ function IQCPanel({param,ward,wardLabel,paramLabel,cfg,sigmaTierCurrent}){
     return(<div style={{marginBottom:12}}>
       <div style={{fontSize:11,fontWeight:600,color:T.text,marginBottom:7}}>LJ Chart — {lv.name||IQC_LEVEL_NAMES[li]}{viols.filter(v=>v.rules.some(r=>r.type==="reject")).length>0&&<span style={{color:T.danger,fontFamily:T.mono,marginLeft:8}}>⚠ {viols.filter(v=>v.rules.some(r=>r.type==="reject")).length} reject</span>}</div>
       <ResponsiveContainer width="100%" height={200}>
-        <ComposedChart data={chartData} margin={{top:4,right:48,bottom:8,left:4}}>
+        <LineChart data={chartData} margin={{top:4,right:48,bottom:8,left:4}}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(14,165,233,.07)"/>
           <XAxis dataKey="idx" tick={{fontSize:9,fill:T.textT}} stroke={T.border}/>
           <YAxis tick={{fontSize:9,fill:T.textT}} stroke={T.border} domain={yDom} label={{value:cfg.unit,angle:-90,position:"insideLeft",fill:T.textT,fontSize:9,dx:-4}}/>
@@ -765,7 +733,7 @@ function IQCPanel({param,ward,wardLabel,paramLabel,cfg,sigmaTierCurrent}){
           <ReferenceLine y={lv.target-2*lv.sd} stroke={T.warn} strokeDasharray="4 3" label={{value:"-2SD",fill:T.warn,fontSize:8,position:"right"}}/>
           <ReferenceLine y={lv.target-3*lv.sd} stroke={T.danger} strokeDasharray="4 3" label={{value:"-3SD",fill:T.danger,fontSize:8,position:"right"}}/>
           <Line dataKey="value" stroke={lvColor} strokeWidth={1.5} dot={<Dot/>} activeDot={false} connectNulls isAnimationActive={false}/>
-        </ComposedChart>
+        </LineChart>
       </ResponsiveContainer>
     </div>);
   };
@@ -1312,7 +1280,7 @@ function MiddlewareTab(){
   const pingInstrument=async(instr)=>{
     setPinging(p=>({...p,[instr.id]:true}));
     setPingResult(p=>({...p,[instr.id]:null}));
-    addLog("info",`Ping ke ${instr.name} (${instr.ip}:${instr.port})...`,instr.name);
+    addLog("info",`Cek koneksi internet (browser tidak bisa ping ${instr.ip}:${instr.port} langsung)...`,instr.name);
     try{
       // We can't actually ping an IP from browser (CORS), so we do a connectivity check
       const start=Date.now();
@@ -1448,7 +1416,7 @@ function MiddlewareTab(){
               <div style={{display:"flex",gap:7,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>
                 {/* Ping */}
                 <button className="pb" onClick={()=>pingInstrument(instr)} disabled={pinging[instr.id]} style={{...BP,padding:"5px 12px",fontSize:11,background:"#0369a1",display:"flex",alignItems:"center",gap:5}}>
-                  {pinging[instr.id]?<><Sp/> Ping...</>:"📡 Ping"}
+                  {pinging[instr.id]?<><Sp/> Cek...</>:"📡 Cek Koneksi"}
                 </button>
                 <button className="sb" onClick={()=>editInstrument(instr)} style={{...BS,padding:"5px 12px",fontSize:11}}>✏️ Edit</button>
                 <button className="sb" onClick={()=>toggleActive(instr.id)} style={{...BS,padding:"5px 12px",fontSize:11,color:instr.active?T.warn:T.ok,borderColor:instr.active?`${T.warn}44`:`${T.ok}44`}}>{instr.active?"⏸ Nonaktifkan":"▶ Aktifkan"}</button>
@@ -1458,7 +1426,7 @@ function MiddlewareTab(){
             {/* Ping result */}
             {pingResult[instr.id]&&(
               <div style={{marginTop:10,padding:"8px 12px",borderRadius:8,background:pingResult[instr.id].ok?"#ecfdf5":"#fef2f2",border:`1px solid ${pingResult[instr.id].ok?T.ok+"44":T.danger+"44"}`,fontSize:11,fontFamily:T.mono,color:pingResult[instr.id].ok?T.ok:T.danger}}>
-                {pingResult[instr.id].ok?`✅ Koneksi internet OK (${pingResult[instr.id].ms}ms) — Middleware siap mengirim data`:`❌ ${pingResult[instr.id].msg}`}
+                {pingResult[instr.id].ok?`✅ Koneksi internet OK (${pingResult[instr.id].ms}ms) — status middleware/instrumen perlu dicek manual`:`❌ ${pingResult[instr.id].msg}`}
               </div>
             )}
           </div>
